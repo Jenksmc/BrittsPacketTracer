@@ -1,5 +1,7 @@
 import { simulatePing, neighbors } from "../engine/network.js";
 import { resolveInterface } from "../engine/connections.js";
+import { addStaticMacEntry, clearDynamicMacEntries, formatMacForCisco, removeMacEntry, SWITCHING_DEVICE_KINDS } from "../engine/switching.js";
+import { normalizeMacAddress } from "../protocols/ethernet.js";
 
 export class CLI {
   constructor(state, device, onChange) {
@@ -11,6 +13,68 @@ export class CLI {
     this.currentVlan = null;
     this.history = [];
     this.historyIndex = 0;
+  }
+  switchingSupported() { return SWITCHING_DEVICE_KINDS.has(this.device.kind); }
+  showMacAddressTable(arg) {
+    if (!this.switchingSupported()) return "% MAC address-table is not supported on this device";
+    const tokens = arg.toLowerCase().trim().split(/\s+/);
+    const entries = this.filteredMacEntries(tokens, arg);
+    const lines=["Vlan    Mac Address       Type        Ports      Age"];
+    for(const e of entries) {
+      const age = (String(e.type).toUpperCase()==="STATIC" || e.static) ? "-" : String(Math.max(0, Math.floor((Date.now() - (e.lastSeenAt || e.learnedAt || Date.now())) / 1000)));
+      lines.push(`${String(e.vlan).padEnd(7)} ${formatMacForCisco(e.mac).padEnd(17)} ${String(e.type).toUpperCase().padEnd(11)} ${(e.interfaceId||e.port||"").padEnd(10)} ${age}`);
+    }
+    return lines.join("\n");
+  }
+  filteredMacEntries(tokens, original) {
+    let entries = [...(this.device.config.macTable||[])];
+    if (tokens.includes("dynamic")) entries = entries.filter(e=>String(e.type).toUpperCase()==="DYNAMIC" && !e.static);
+    if (tokens.includes("static")) entries = entries.filter(e=>String(e.type).toUpperCase()==="STATIC" || e.static);
+    const vlanIndex = tokens.indexOf("vlan");
+    if (vlanIndex >= 0) {
+      const vlan = Number(tokens[vlanIndex+1]);
+      entries = entries.filter(e=>Number(e.vlan)===vlan);
+    }
+    const interfaceMatch = original.match(/\b(?:interface|int)\s+(.+)$/i);
+    if (interfaceMatch) {
+      const key = resolveInterface(this.device.config.interfaces, interfaceMatch[1]);
+      if (!key) return [];
+      entries = entries.filter(e=>(e.interfaceId||e.port)===key);
+    }
+    return entries;
+  }
+  clear(arg) {
+    if (this.mode !== "privileged") return "% Invalid input detected at '^' marker.";
+    const lower = arg.toLowerCase().trim();
+    if (!lower.startsWith("mac address-table dynamic") && !lower.startsWith("mac add dyn")) return "% Unrecognized clear command";
+    if (!this.switchingSupported()) return "% MAC address-table is not supported on this device";
+    const tokens = lower.split(/\s+/);
+    const filter = {};
+    const vlanIndex = tokens.indexOf("vlan");
+    if (vlanIndex >= 0) filter.vlan = Number(tokens[vlanIndex+1]);
+    const ifaceMatch = arg.match(/\b(?:interface|int)\s+(.+)$/i);
+    if (ifaceMatch) {
+      const key = resolveInterface(this.device.config.interfaces, ifaceMatch[1]);
+      if (!key) return "% Invalid interface type and number";
+      filter.interfaceId = key;
+    }
+    const cleared = clearDynamicMacEntries(this.device, filter);
+    this.changed();
+    return `${cleared} dynamic MAC address-table entr${cleared===1?"y":"ies"} cleared.`;
+  }
+  configureStaticMac(command, remove) {
+    if (!this.switchingSupported()) return "% MAC address-table is not supported on this device";
+    const match = command.match(/^mac address-table static\s+(\S+)\s+vlan\s+(\d+)\s+interface\s+(.+)$/i);
+    if (!match) return "% Incomplete command";
+    const mac = normalizeMacAddress(match[1]);
+    if (!mac) return "% Invalid MAC address";
+    const vlan = Number(match[2]);
+    const key = resolveInterface(this.device.config.interfaces, match[3]);
+    if (!key) return "% Invalid interface type and number";
+    if (remove) removeMacEntry(this.device, mac, vlan, key);
+    else addStaticMacEntry(this.device, mac, vlan, key);
+    this.changed();
+    return "";
   }
   prompt() {
     const h = this.device.config.hostname || this.device.name;
@@ -37,6 +101,7 @@ export class CLI {
 
     if (c.startsWith("show ")) return this.show(command.slice(5));
     if (c.startsWith("sh ")) return this.show(command.slice(3));
+    if (c.startsWith("clear ")) return this.clear(command.slice(6));
     if (c.startsWith("ping ")) {
       const ip=command.split(/\s+/)[1];
       return simulatePing(this.state,this.device.id,ip).output;
@@ -121,11 +186,7 @@ export class CLI {
       for(const e of this.device.config.arpTable||[]) lines.push(`Internet  ${String(e.ip).padEnd(16)} 0          ${e.mac}  ARPA`);
       return lines.join("\n");
     }
-    if (["mac address-table","mac address-table dynamic","mac add"].includes(a)) {
-      const lines=["Vlan    Mac Address       Type        Ports"];
-      for(const e of this.device.config.macTable||[]) lines.push(`${String(e.vlan).padEnd(7)} ${e.mac.padEnd(17)} ${String(e.type).padEnd(11)} ${e.port}`);
-      return lines.join("\n");
-    }
+    if (a.startsWith("mac address-table") || a.startsWith("mac add")) return this.showMacAddressTable(arg);
     if (["spanning-tree","span"].includes(a)) { const stp=this.device.config.stp||{}; return `Spanning tree enabled protocol ${stp.mode||"pvst"}\nRoot priority ${stp.priority||32768}`; }
     if (a==="running-config" || a==="run" || a==="startup-config") return this.runningConfig();
     return `% Unrecognized show command`;
@@ -144,6 +205,7 @@ export class CLI {
       out.push("!");
     }
     for (const r of d.config.routes) out.push(`ip route ${r.network} ${r.mask} ${r.nextHop}`);
+    for (const e of d.config.macTable||[]) if (String(e.type).toUpperCase()==="STATIC" || e.static) out.push(`mac address-table static ${formatMacForCisco(e.mac)} vlan ${e.vlan} interface ${e.interfaceId||e.port}`);
     if (d.config.ospf.processId) {
       out.push(`router ospf ${d.config.ospf.processId}`);
       d.config.ospf.networks.forEach(n=>out.push(` network ${n.network} ${n.wildcard} area ${n.area}`));
@@ -178,6 +240,8 @@ export class CLI {
       const id=Number(command.split(/\s+/)[2]);
       this.device.config.ospf.processId=id; this.mode="router-ospf"; this.changed(); return "";
     }
+    if (c.startsWith("mac address-table static ")) return this.configureStaticMac(command, false);
+    if (c.startsWith("no mac address-table static ")) return this.configureStaticMac(command.replace(/^no\s+/i, ""), true);
     return "% Invalid configuration command";
   }
   interfaceConfig(command) {
