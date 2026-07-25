@@ -118,7 +118,7 @@ export class CLI {
       for(const e of this.device.config.macTable||[]) lines.push(`${String(e.vlan).padEnd(7)} ${e.mac.padEnd(17)} ${String(e.type).padEnd(11)} ${e.port}`);
       return lines.join("\n");
     }
-    if (["spanning-tree","span"].includes(a)) return `Spanning tree enabled protocol ${this.device.config.stp?.mode||"pvst"}\nRoot priority ${this.device.config.stp?.priority||32768}`;
+    if (["spanning-tree","span"].includes(a)) { const stp=this.device.config.stp||{}; return `Spanning tree enabled protocol ${stp.mode||"pvst"}\nRoot priority ${stp.priority||32768}`; }
     if (a==="running-config" || a==="run" || a==="startup-config") return this.runningConfig();
     return `% Unrecognized show command`;
   }
@@ -216,5 +216,5 @@ export class CLI {
     }
     return "% Invalid OSPF command";
   }
-  changed() { this.onChange?.(); }
+  changed() { if(this.onChange)this.onChange(); }
 }
