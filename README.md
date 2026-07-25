@@ -23,4 +23,4 @@ Publish from the `main` branch and `/(root)` folder.
 
 The expanded UI and data model prepare the project for the full protocol roadmap. Complete protocol behavior, packet-level inspection, physical module compatibility, and automatic CCNA grading require additional engine milestones and are not represented as finished in this version.
 
-Phase 3 intentionally does not include full trunk configuration, DTP, native VLAN behavior, STP/RSTP, EtherChannel, full ARP integration, packet animations, or complete simulation-mode UI.
+Phase 3 now includes focused browser-safe foundations for trunk configuration, DTP-style dynamic mode negotiation, native VLAN and allowed VLAN behavior, STP/RSTP port-state forwarding controls, EtherChannel member suppression, ARP request/reply delivery over Ethernet, and lightweight packet markers. Complete Cisco parity for those features and full simulation-mode UI remain future milestones.

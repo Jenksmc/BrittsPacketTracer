@@ -111,10 +111,27 @@ export function simulatePing(state,sourceId,destIp){ computeLinkStates(state); c
 function simulatePingFrame(state,source,target,destIp){
   const sourceIntf=firstEthernetInterface(source),targetIntf=firstEthernetInterface(target);
   if(!sourceIntf||!targetIntf)return {ok:false,reason:"No Ethernet-capable interface"};
+  const arp=resolveArp(state,source,sourceIntf,target,targetIntf,destIp);
+  if(!arp.ok)return arp;
   const frame=createFrame({sourceMac:sourceIntf.mac,destinationMac:targetIntf.mac||BROADCAST_MAC,etherType:"0x0800",payload:{type:"icmp-echo",destinationIp:destIp},vlanId:sourceIntf.vlan||1,ingressDeviceId:source.id,ingressInterfaceId:sourceIntf.name});
   const result=transmitFrame(state,source.id,sourceIntf.name,frame);
   return {...result,ok:result.deliveries?.some(d=>d.device.id===target.id)||false};
 }
+function resolveArp(state,source,sourceIntf,target,targetIntf,destIp){
+  source.config.arpTable ||= [];
+  target.config.arpTable ||= [];
+  const existing=source.config.arpTable.find(e=>e.ip===destIp&&normalizeMacAddress(e.mac)===normalizeMacAddress(targetIntf.mac));
+  if(existing)return {ok:true,cached:true};
+  const request=transmitFrame(state,source.id,sourceIntf.name,{destinationMac:BROADCAST_MAC,etherType:"0x0806",payload:{type:"arp-request",senderIp:interfaceIp(source,sourceIntf),senderMac:sourceIntf.mac,targetIp:destIp},vlanId:sourceIntf.vlan||1});
+  if(!request.deliveries?.some(d=>d.device.id===target.id))return {...request,ok:false,reason:"ARP request did not reach target"};
+  const reply=transmitFrame(state,target.id,targetIntf.name,{destinationMac:sourceIntf.mac,etherType:"0x0806",payload:{type:"arp-reply",senderIp:destIp,senderMac:targetIntf.mac,targetIp:interfaceIp(source,sourceIntf),targetMac:sourceIntf.mac},vlanId:targetIntf.vlan||1});
+  if(!reply.deliveries?.some(d=>d.device.id===source.id))return {...reply,ok:false,reason:"ARP reply did not reach source"};
+  upsertArp(source,destIp,targetIntf.mac,sourceIntf.name);
+  upsertArp(target,interfaceIp(source,sourceIntf),sourceIntf.mac,targetIntf.name);
+  return {ok:true,request,reply};
+}
+function upsertArp(device,ip,mac,intfName){ if(!ip)return; const table=device.config.arpTable; const entry=table.find(e=>e.ip===ip); if(entry){entry.mac=mac;entry.interface=intfName;entry.type="dynamic";}else table.push({ip,mac,type:"dynamic",interface:intfName}); }
+function interfaceIp(device,intf){ return intf.ip || device.config.ipSettings?.ip || ""; }
 function firstEthernetInterface(d){ return Object.values(d.config.interfaces||{}).find(i=>["ethernet","fiberEthernet","wireless"].includes(i.interfaceType)&&normalizeMacAddress(i.mac)); }
 function learnAlongPath(state,path,target){
   for(let i=0;i<path.length;i++){

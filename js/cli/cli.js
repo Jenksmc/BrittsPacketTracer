@@ -1,6 +1,6 @@
 import { simulatePing, neighbors } from "../engine/network.js";
 import { resolveInterface } from "../engine/connections.js";
-import { addStaticMacEntry, clearDynamicMacEntries, formatMacForCisco, isStaticMacEntry, removeMacEntry, SWITCHING_DEVICE_KINDS } from "../engine/switching.js";
+import { addStaticMacEntry, clearDynamicMacEntries, effectiveSwitchportMode, formatMacForCisco, isStaticMacEntry, parseVlanList, removeMacEntry, SWITCHING_DEVICE_KINDS, updateAllowedVlans } from "../engine/switching.js";
 import { normalizeMacAddress } from "../protocols/ethernet.js";
 
 export class CLI {
@@ -189,7 +189,8 @@ export class CLI {
       return lines.join("\n");
     }
     if (a.startsWith("mac address-table") || a.startsWith("mac add")) return this.showMacAddressTable(arg);
-    if (["spanning-tree","span"].includes(a)) { const stp=this.device.config.stp||{}; return `Spanning tree enabled protocol ${stp.mode||"pvst"}\nRoot priority ${stp.priority||32768}`; }
+    if (["spanning-tree","span"].includes(a)) return this.showSpanningTree();
+    if (["etherchannel summary","etherchannel sum"].includes(a)) return this.showEtherChannelSummary();
     if (a==="running-config" || a==="run" || a==="startup-config") return this.runningConfig();
     return `% Unrecognized show command`;
   }
@@ -199,10 +200,16 @@ export class CLI {
       out.push(`interface ${name}`);
       if (i.description) out.push(` description ${i.description}`);
       if (i.ip) out.push(` ip address ${i.ip} ${i.mask}`);
-      if (this.device.type==="switch") {
+      if (this.switchingSupported()) {
         out.push(` switchport mode ${i.mode}`);
         if (i.mode==="access") out.push(` switchport access vlan ${i.vlan}`);
+        if (effectiveSwitchportMode(i)==="trunk") {
+          out.push(` switchport trunk native vlan ${i.nativeVlan||1}`);
+          out.push(` switchport trunk allowed vlan ${i.allowedVlans||"all"}`);
+        }
       }
+      if (i.channelGroup) out.push(` channel-group ${i.channelGroup} mode ${i.channelMode||"on"}`);
+      if (i.stpState) out.push(` spanning-tree port-state ${i.stpState}`);
       out.push(i.shutdown ? " shutdown" : " no shutdown");
       out.push("!");
     }
@@ -242,6 +249,12 @@ export class CLI {
       const id=Number(command.split(/\s+/)[2]);
       this.device.config.ospf.processId=id; this.mode="router-ospf"; this.changed(); return "";
     }
+    if (c.startsWith("spanning-tree mode ")) {
+      const mode=command.split(/\s+/)[2];
+      if (!["pvst","rapid-pvst","rstp"].includes(mode)) return "% Invalid spanning-tree mode";
+      this.device.config.stp ||= {};
+      this.device.config.stp.mode=mode; this.changed(); return "";
+    }
     if (c.startsWith("mac address-table static ")) return this.configureStaticMac(command, false);
     if (c.startsWith("no mac address-table static ")) return this.configureStaticMac(command.replace(/^no\s+/i, ""), true);
     return "% Invalid configuration command";
@@ -257,17 +270,59 @@ export class CLI {
     if (c==="no shutdown" || c==="no shut") { i.shutdown=false; this.changed(); return ""; }
     if (c.startsWith("description ")) { i.description=command.slice(12); this.changed(); return ""; }
     if (c.startsWith("switchport mode ")) {
-      const mode=command.split(/\s+/)[2];
-      if (!["access","trunk"].includes(mode)) return "% Invalid mode";
-      i.mode=mode; this.changed(); return "";
+      const rest=command.replace(/^switchport mode\s+/i,"").toLowerCase();
+      const mode=rest.startsWith("dynamic ") ? rest : command.split(/\s+/)[2];
+      if (!["access","trunk","dynamic auto","dynamic desirable"].includes(mode)) return "% Invalid mode";
+      i.mode=mode; i.dtpMode=mode.startsWith("dynamic ")?mode.split(/\s+/)[1]:"none"; this.changed(); return "";
     }
     if (c.startsWith("switchport access vlan ")) {
       const id=Number(command.split(/\s+/)[3]); i.vlan=id;
       if (!this.device.config.vlans[id]) this.device.config.vlans[id]={id,name:`VLAN${id}`};
       this.changed(); return "";
     }
+    if (c.startsWith("switchport trunk native vlan ")) {
+      const id=Number(command.split(/\s+/)[4]);
+      if (!Number.isInteger(id)||id<1||id>4094) return "% Invalid VLAN";
+      i.nativeVlan=id; this.changed(); return "";
+    }
+    if (c.startsWith("switchport trunk allowed vlan ")) {
+      const rest=command.replace(/^switchport trunk allowed vlan\s+/i,"").trim();
+      const [op, list] = rest.split(/\s+/,2);
+      if (["add","remove"].includes(op)) updateAllowedVlans(i, op, list);
+      else if (op==="all" || op==="none") updateAllowedVlans(i, op);
+      else updateAllowedVlans(i, "set", rest);
+      this.changed(); return "";
+    }
+    if (c.startsWith("channel-group ")) {
+      const parts=command.split(/\s+/), group=Number(parts[1]), mode=parts[3]||"on";
+      if (!Number.isInteger(group)||group<1||group>64) return "% Invalid channel group";
+      if (!["on","active","passive","desirable","auto"].includes(mode)) return "% Invalid channel-group mode";
+      i.channelGroup=group; i.channelMode=mode; i.etherChannelState="bundled"; this.changed(); return "";
+    }
+    if (c==="no channel-group") { i.channelGroup=null; i.channelMode=null; i.etherChannelState=null; this.changed(); return ""; }
+    if (c.startsWith("spanning-tree port-state ")) {
+      const state=command.split(/\s+/)[2];
+      if (!["forwarding","blocking","listening","learning","discarding"].includes(state)) return "% Invalid spanning-tree port state";
+      i.stpState=state; this.changed(); return "";
+    }
+    if (c==="no spanning-tree port-state") { i.stpState="forwarding"; this.changed(); return ""; }
     if (c==="no ip address") { i.ip=""; i.mask=""; this.changed(); return ""; }
     return "% Invalid interface command";
+  }
+  showSpanningTree() {
+    const stp=this.device.config.stp||{}, lines=[`Spanning tree enabled protocol ${stp.mode||"pvst"}`,`Root priority ${stp.priority||32768}`,"Interface              Role Sts Cost"];
+    for (const i of Object.values(this.device.config.interfaces||{})) if ((i.layerCapabilities||[]).includes(2)) lines.push(`${i.name.padEnd(22)} Desg ${(i.stpState||"forwarding").padEnd(4)} 19`);
+    return lines.join("\n");
+  }
+  showEtherChannelSummary() {
+    const groups=new Map();
+    for (const i of Object.values(this.device.config.interfaces||{})) if (i.channelGroup) {
+      if (!groups.has(i.channelGroup)) groups.set(i.channelGroup, []);
+      groups.get(i.channelGroup).push(i);
+    }
+    const lines=["Group  Port-channel  Protocol    Ports"];
+    for (const [group, members] of groups) lines.push(`${String(group).padEnd(6)} Po${group.toString().padEnd(12)} ${String(members[0].channelMode||"on").padEnd(11)} ${members.map(i=>i.name).join(" ")}`);
+    return lines.join("\n");
   }
   vlanConfig(command) {
     if (command.toLowerCase().startsWith("name ")) {

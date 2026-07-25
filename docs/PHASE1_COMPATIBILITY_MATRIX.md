@@ -72,6 +72,7 @@ Priority order for endpoint state is:
 | Link-state calculation evaluates both endpoints | Complete and verified | `computeLinkStates()` calls `validateLink()` for every link and updates both endpoint interface objects. |
 | Link state after cable creation/removal, shutdown/no shutdown, and power change | Complete and verified | UI operations update endpoint references and rerender through `computeLinkStates()`; regression tests cover endpoint indicators and link validation. |
 | Speed/duplex capabilities and negotiation | Implemented but incomplete | Ethernet-like interfaces now expose supported speeds/duplex modes and `validateLink()` computes negotiated values; exhaustive Packet Tracer mismatch behavior remains follow-up work. |
+| Trunking, DTP, STP/RSTP, EtherChannel, and ARP integration | Implemented but incomplete | Phase 3 now includes forwarding-affecting trunk/native/allowed VLAN behavior, DTP-style dynamic modes, explicit STP/RSTP port states, deterministic EtherChannel member suppression, and Ethernet ARP request/reply delivery. Full Cisco protocol parity remains follow-up work. |
 | Device-specific inventories | Complete and verified | `DEVICE_TYPES` defines model-specific port lists and `defaultDevice()` hydrates those exact ports. |
 | Interface parsing | Complete and verified | `normalizeInterfaceName()`/`resolveInterface()` support IOS-style names and abbreviations and reject nonexistent families. |
 | CLI/GUI interface synchronization | Complete and verified | CLI and Config tab both write `device.config.interfaces[interfaceName]`. |
@@ -84,7 +85,7 @@ Priority order for endpoint state is:
 | --- | --- |
 | Hub / repeater | Repeats ingress frames out other eligible operational ports, does not learn MAC addresses, and records drops/counters through the shared forwarding path. |
 | Bridge | Learns source MAC addresses per VLAN and forwards/floods using its local MAC table. |
-| Switch | Learns, ages, forwards known unicast, floods unknown unicast/broadcast/multicast within the access VLAN, and exposes MAC-table CLI/UI inspection. |
+| Switch | Learns, ages, forwards known unicast, floods unknown unicast/broadcast/multicast within the access or trunk forwarding domain, honors native/allowed VLANs, explicit STP/RSTP states, and EtherChannel member suppression, and exposes MAC-table CLI/UI inspection. |
 | Multilayer switch | Uses the same Layer 2 switching foundation for switchports; full routed SVI/multilayer forwarding remains later work. |
 | Router / firewall | Receives Ethernet frames addressed to the interface MAC, broadcast, or multicast, but does not bridge frames between routed interfaces. |
 | End devices | Receive own unicast, broadcast, and multicast frames; unrelated unicast is dropped unless future promiscuous behavior is added. |

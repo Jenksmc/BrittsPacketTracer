@@ -155,6 +155,7 @@ function handleFrameArrival(state, queue, event, deliveries, drops) {
   const intf = device?.config?.interfaces?.[event.interfaceId];
   const frame = event.frame;
   if (!device || !intf || !isInterfaceOperational(device, intf)) return pushDrop(state, drops, frame, device, event.interfaceId, L2_DROP_REASONS.ingressDown);
+  if (SWITCHING_DEVICE_KINDS.has(device.kind) && effectiveSwitchportMode(intf) === "access") frame.vlanId = frame.vlan = ingressVlan(intf);
   incrementInterfaceCounter(intf, "framesReceived", 1);
   incrementInterfaceCounter(intf, "bytesReceived", frame.size);
   addFrameHistory(frame, { action: "ingress", deviceId: device.id, interfaceId: event.interfaceId, vlan: frame.vlanId });
@@ -166,7 +167,7 @@ function handleFrameArrival(state, queue, event, deliveries, drops) {
 
 function repeatHubFrame(state, queue, device, ingressInterfaceId, frame, drops) {
   for (const [name, intf] of Object.entries(device.config.interfaces || {})) {
-    if (name === ingressInterfaceId || !eligibleEgressInterface(device, intf, frame.vlanId) || !egressHasUsableConnection(state, device, name)) continue;
+    if (name === ingressInterfaceId || !eligibleEgressInterface(state, device, name, intf, frame.vlanId) || !egressHasUsableConnection(state, device, name)) continue;
     incrementInterfaceCounter(intf, "framesFlooded", 1);
     queue.enqueue({ type: "frame-forward", frame: cloneEthernetFrame(frame), deviceId: device.id, interfaceId: name, direction: "egress" });
   }
@@ -182,7 +183,7 @@ function switchFrame(state, queue, device, ingressInterfaceId, frame, drops) {
       const egress = macEntryInterface(entry);
       if (egress === ingressInterfaceId) return;
       const intf = device.config.interfaces?.[egress];
-      if (!eligibleEgressInterface(device, intf, frame.vlanId) || !egressHasUsableConnection(state, device, egress)) {
+      if (!eligibleEgressInterface(state, device, egress, intf, frame.vlanId) || !egressHasUsableConnection(state, device, egress)) {
         removeDynamicMacEntry(device, destination, frame.vlanId);
         return pushDrop(state, drops, frame, device, egress, L2_DROP_REASONS.unusableMacEntry);
       }
@@ -192,7 +193,7 @@ function switchFrame(state, queue, device, ingressInterfaceId, frame, drops) {
     }
   }
   for (const [name, intf] of Object.entries(device.config.interfaces || {})) {
-    if (name === ingressInterfaceId || !eligibleEgressInterface(device, intf, frame.vlanId) || !egressHasUsableConnection(state, device, name)) continue;
+    if (name === ingressInterfaceId || !eligibleEgressInterface(state, device, name, intf, frame.vlanId) || !egressHasUsableConnection(state, device, name)) continue;
     incrementInterfaceCounter(intf, flood ? "framesFlooded" : "framesForwarded", 1);
     queue.enqueue({ type: "frame-forward", frame: cloneEthernetFrame(frame), deviceId: device.id, interfaceId: name, direction: "egress" });
   }
@@ -286,14 +287,84 @@ function macEntryInterface(entry) {
 }
 
 function ingressVlan(intf) {
-  return normalizeVlanId(intf.accessVlan || intf.vlan || 1);
+  return normalizeVlanId(intf.mode === "trunk" ? intf.nativeVlan : intf.accessVlan || intf.vlan || 1);
 }
 
-function eligibleEgressInterface(device, intf, vlan) {
+function eligibleEgressInterface(state, device, interfaceId, intf, vlan) {
   if (!isInterfaceOperational(device, intf) || !ethernetCapable(intf)) return false;
+  if (!stpForwards(intf) || !etherChannelForwards(device, interfaceId)) return false;
   const vlanId = normalizeVlanId(vlan);
-  if ((intf.mode || intf.vlanMode) === "trunk") return true;
+  const remote = resolveRemoteEndpoint(state, device.id, interfaceId);
+  if (effectiveSwitchportMode(intf, remote?.intf) === "trunk") return vlanAllowedOnTrunk(intf, vlanId);
   return normalizeVlanId(intf.accessVlan || intf.vlan || 1) === vlanId;
+}
+
+export function effectiveSwitchportMode(intf, peer = null) {
+  const mode = String(intf?.mode || intf?.vlanMode || "access").toLowerCase();
+  const dtp = String(intf?.dtpMode || "").toLowerCase();
+  const peerMode = String(peer?.mode || peer?.vlanMode || "").toLowerCase();
+  const peerDtp = String(peer?.dtpMode || "").toLowerCase();
+  if (mode === "trunk") return peerMode === "access" ? "access" : "trunk";
+  if (mode === "access") return "access";
+  if (mode === "dynamic desirable" || dtp === "desirable") return peerMode !== "access" ? "trunk" : "access";
+  if (mode === "dynamic auto" || dtp === "auto") return peerMode === "trunk" || peerMode === "dynamic desirable" || peerDtp === "desirable" ? "trunk" : "access";
+  return "access";
+}
+
+export function parseVlanList(value) {
+  if (value === "all" || value === undefined || value === null || value === "") return new Set(Array.from({ length: 4094 }, (_, i) => i + 1));
+  if (value === "none") return new Set();
+  const vlans = new Set();
+  for (const part of String(value).split(",")) {
+    const [start, end = start] = part.trim().split("-").map(Number);
+    if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
+    for (let vlan = Math.max(1, start); vlan <= Math.min(4094, end); vlan++) vlans.add(vlan);
+  }
+  return vlans;
+}
+
+export function formatVlanList(vlans) {
+  const sorted = [...vlans].sort((a, b) => a - b);
+  if (sorted.length === 4094) return "all";
+  if (!sorted.length) return "none";
+  const ranges = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const start = sorted[i];
+    while (sorted[i + 1] === sorted[i] + 1) i++;
+    const end = sorted[i];
+    ranges.push(start === end ? String(start) : `${start}-${end}`);
+  }
+  return ranges.join(",");
+}
+
+export function vlanAllowedOnTrunk(intf, vlan) {
+  return parseVlanList(intf.allowedVlans || "all").has(normalizeVlanId(vlan));
+}
+
+export function updateAllowedVlans(intf, operation, value) {
+  if (operation === "all") return intf.allowedVlans = "all";
+  if (operation === "none") return intf.allowedVlans = "none";
+  const current = parseVlanList(intf.allowedVlans || "all");
+  const incoming = parseVlanList(value);
+  if (operation === "set") return intf.allowedVlans = formatVlanList(incoming);
+  if (operation === "add") for (const vlan of incoming) current.add(vlan);
+  if (operation === "remove") for (const vlan of incoming) current.delete(vlan);
+  return intf.allowedVlans = formatVlanList(current);
+}
+
+function stpForwards(intf) {
+  const state = String(intf?.stpState || intf?.rstpState || "forwarding").toLowerCase();
+  return !["blocking", "blocked", "discarding", "listening", "learning"].includes(state);
+}
+
+function etherChannelForwards(device, interfaceId) {
+  const intf = device?.config?.interfaces?.[interfaceId];
+  if (!intf?.channelGroup) return true;
+  const members = Object.entries(device.config.interfaces || {})
+    .filter(([, candidate]) => Number(candidate.channelGroup) === Number(intf.channelGroup))
+    .map(([name]) => name)
+    .sort();
+  return members[0] === interfaceId;
 }
 
 function egressHasUsableConnection(state, device, interfaceId) {

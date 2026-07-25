@@ -30,7 +30,7 @@ Blocking issues corrected for Phase 3:
 Nonblocking limitations:
 
 - Serial clocking, wireless SSID/security association, rich module inventory, and exact Packet Tracer endpoint marker parity remain incomplete.
-- Full trunk configuration, STP, EtherChannel, ARP integration, and simulation-mode UI are intentionally outside Phase 3.
+- Full Cisco parity for trunk negotiation edge cases, STP/RSTP topology calculation, EtherChannel negotiation protocols, ARP protocol timing, and simulation-mode UI remains future work.
 
 ## Phase 3 Layer 2 architecture
 
@@ -40,7 +40,13 @@ Nonblocking limitations:
 
 Each switch/bridge owns its own `device.config.macTable`. Entries include MAC address, VLAN, interface, type, learned/last-seen timestamps, static/dynamic status, and a secure placeholder. Dynamic entries age deterministically through `ageMacTable()` using `device.config.macAgingTimeMs` (default 300 seconds). Static entries do not age out.
 
-VLAN isolation is access-VLAN based for Phase 3. MAC learning, known-unicast lookup, unknown-unicast flooding, multicast flooding, and broadcast flooding are scoped to the ingress VLAN. Complete 802.1Q trunk behavior and CLI trunk configuration are reserved for the next phase, but frame metadata already includes optional tag fields.
+VLAN forwarding supports access ports, trunk ports, native VLAN configuration, allowed VLAN lists, and DTP-style `dynamic auto` / `dynamic desirable` state. MAC learning, known-unicast lookup, unknown-unicast flooding, multicast flooding, and broadcast flooding are scoped to the ingress VLAN. Frame metadata includes optional 802.1Q tag fields for future packet inspection and richer trunk visualization.
+
+STP/RSTP support currently models explicit per-port forwarding states. Ports in blocking, discarding, listening, or learning states do not forward Layer 2 traffic. Full bridge ID/root election/topology recalculation is not implemented yet.
+
+EtherChannel support currently models configured channel groups by forwarding on a deterministic representative member and suppressing duplicate member forwarding. Full LACP/PAgP negotiation is not implemented yet.
+
+Basic ARP integration sends ARP requests and replies as Ethernet frames before IPv4 ping traffic and updates the existing ARP table with learned mappings. Full ARP timers, gratuitous ARP, and proxy ARP remain future work.
 
 Loop safety is enforced by a traversal budget and bounded event queue. When the safety limit is reached, the frame is dropped with `loop-safety-limit`; this is simulator protection, not STP.
 
@@ -58,9 +64,19 @@ Switching-capable devices expose MAC-table state through the real forwarding tab
 - `clear mac address-table dynamic vlan <vlan-id>`
 - `mac address-table static <mac> vlan <vlan-id> interface <interface>`
 - `no mac address-table static <mac> vlan <vlan-id> interface <interface>`
+- `switchport mode access|trunk|dynamic auto|dynamic desirable`
+- `switchport trunk native vlan <vlan-id>`
+- `switchport trunk allowed vlan <list|add <list>|remove <list>|all|none>`
+- `spanning-tree mode pvst|rapid-pvst|rstp`
+- `spanning-tree port-state forwarding|blocking|listening|learning|discarding`
+- `channel-group <id> mode on|active|passive|desirable|auto`
+- `show spanning-tree`
+- `show etherchannel summary`
 
 The device window adds a Switching tab for switches, multilayer switches, and bridges. It reads the same `device.config.macTable` and recent `state.l2Events` used by the engine and can clear dynamic entries.
 
+The topology SVG renders lightweight packet markers from recent Layer 2 forwarding events. These markers are intentionally simple activity indicators rather than the full Packet Tracer simulation-mode animation system.
+
 ## Save schema
 
-Version 3 saves devices, interfaces, stable interface MAC addresses, links, VLAN/access-mode configuration, MAC aging configuration, and static MAC entries. Dynamic MAC entries and recent frame events are deliberately not persisted; they are rebuilt through new traffic after loading.
+Version 3 saves devices, interfaces, stable interface MAC addresses, links, VLAN/access/trunk/native/allowed VLAN configuration, DTP mode, STP/RSTP mode and port states, EtherChannel groups, MAC aging configuration, ARP table state, and static MAC entries. Dynamic MAC entries and recent frame events are deliberately not persisted; they are rebuilt through new traffic after loading.
