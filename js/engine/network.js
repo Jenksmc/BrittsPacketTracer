@@ -96,7 +96,8 @@ function learnAlongPath(state,path,target){
     if(["switch","multilayer-switch","bridge"].includes(DEVICE_TYPES[d.type].kind)){
       const next=path[i+1]||target.id;
       const n=neighbors(state,d.id).find(x=>x.device.id===next);
-      if(n&&!d.config.macTable.some(e=>e.mac===firstMac(target)))d.config.macTable.push({vlan:(d.config.interfaces[n.local.port]&&d.config.interfaces[n.local.port].vlan)||1,mac:firstMac(target),port:n.local.port,type:"DYNAMIC"});
+      const targetMac=firstMac(target);
+      if(n&&!d.config.macTable.some(e=>e.mac===targetMac))d.config.macTable.push({vlan:(d.config.interfaces[n.local.port]&&d.config.interfaces[n.local.port].vlan)||1,mac:targetMac,port:n.local.port,type:"DYNAMIC"});
     }
     const targetIntf=Object.values(target.config.interfaces).find(x=>x.ip);
     const ip=(target.config.ipSettings&&target.config.ipSettings.ip)||(targetIntf&&targetIntf.ip);
