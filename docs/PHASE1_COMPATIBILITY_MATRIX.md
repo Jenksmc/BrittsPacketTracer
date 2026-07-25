@@ -31,3 +31,36 @@ This matrix documents the implemented Layer 1 connection palette and physical in
 - Serial clock-rate enforcement is documented but not enforced until Phase 2.
 - Multi-end octal breakout behavior and richer USB behavior are not modeled yet.
 - Wireless association is represented as a compatible Layer 1 connection; SSID/security association logic is deferred to later wireless milestones.
+
+## Phase 2 endpoint indicator model
+
+The current indicator mapping is an internally consistent approximation and should not be treated as verified Packet Tracer parity. Exact Packet Tracer shape/color behavior still needs validation against Cisco Packet Tracer.
+
+Priority order for endpoint state is:
+
+1. Missing endpoint or port: disconnected.
+2. Device power, module absence, or physical carrier down: physical down.
+3. Administrative shutdown: administratively down.
+4. Error-disabled or BPDU Guard err-disabled: error-disabled.
+5. Cable/port mismatch: incompatibility.
+6. EtherChannel state: bundled, suspended/incompatible, or standalone.
+7. STP/RSTP state: blocking/discarding, listening/negotiating, learning, forwarding.
+8. Cable role overlays: Serial DCE/DTE and wireless association.
+9. Otherwise: physical link up / forwarding.
+
+| Indicator | Meaning |
+| --- | --- |
+| Green triangle | Physical link up and forwarding/operational. |
+| Amber diamond | Negotiating or STP listening. |
+| Amber triangle | STP learning. |
+| Purple blocked symbol | STP blocking or RSTP discarding. |
+| Gray square | Administratively down. |
+| Red triangle | Physical link down or failed. |
+| Dark red alert | Error-disabled or BPDU Guard err-disabled. |
+| Green `Po` badge | EtherChannel bundled member. |
+| Amber `S` badge | EtherChannel suspended or incompatible member. |
+| Teal `I` badge | EtherChannel standalone/individual member. |
+| Gray circle | Cable disconnected at this end. |
+| Red `×` | Cable or port incompatibility. |
+| DCE/DTE badge | Serial role on the selected serial cable side. |
+| Cyan wireless marker | Wireless association state. |
