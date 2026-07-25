@@ -202,7 +202,7 @@ export function negotiateLinkSettings(aPort, bPort) {
   if (aDuplex && bDuplex) { duplex = aDuplex === bDuplex ? aDuplex : `${aDuplex}/${bDuplex}`; duplexMismatch = aDuplex !== bDuplex; }
   else if (aDuplex) duplex = bDuplexes.includes(aDuplex) ? aDuplex : null;
   else if (bDuplex) duplex = aDuplexes.includes(bDuplex) ? bDuplex : null;
-  else duplex = aDuplexes.includes("full") && bDuplexes.includes("full") ? "full" : highestCommon(aDuplexes, bDuplexes);
+  else duplex = aDuplexes.includes("full") && bDuplexes.includes("full") ? "full" : highestCommon(aDuplexes, bDuplexes, DUPLEX_ORDER);
   if (!duplex) return { ok: false, reason: `Duplex mismatch between ${aPort.name} and ${bPort.name}.` };
   return { ok: true, speed, duplex, duplexMismatch };
 }
@@ -211,11 +211,10 @@ function ethernetLike(intf) { return ["ethernet", "fiberEthernet", "wireless"].i
 function configuredValue(value) { const v = String(value || "auto").toLowerCase(); return v === "auto" ? null : value; }
 function supportedSpeeds(intf) { return intf.supportedSpeeds || (intf.speed && intf.speed !== "auto" ? [intf.speed] : ["10M", "100M"]); }
 function supportedDuplex(intf) { return intf.supportedDuplex || (intf.duplex && intf.duplex !== "auto" ? [intf.duplex] : ["half", "full"]); }
-// Shared rank table is used only by highestCommon() for same-domain values:
-// speed lists compare with speed lists, and duplex lists compare with duplex lists.
-const NEGOTIATION_ORDER = new Map(["10M", "11M", "54M", "100M", "150M", "1G", "10G", "half", "full"].map((value, index) => [value, index]));
-function highestCommon(a, b) {
-  return [...a].filter(x => b.includes(x)).sort((x, y) => (NEGOTIATION_ORDER.get(y) ?? -1) - (NEGOTIATION_ORDER.get(x) ?? -1))[0] || null;
+const SPEED_ORDER = new Map(["10M", "11M", "54M", "100M", "150M", "1G", "10G"].map((value, index) => [value, index]));
+const DUPLEX_ORDER = new Map(["half", "full"].map((value, index) => [value, index]));
+function highestCommon(a, b, order = SPEED_ORDER) {
+  return [...a].filter(x => b.includes(x)).sort((x, y) => (order.get(y) ?? -1) - (order.get(x) ?? -1))[0] || null;
 }
 
 function automaticCableForPair(aDevice, aPort, bDevice, bPort) {

@@ -101,14 +101,14 @@ export function transmitFrame(state, deviceId, interfaceId, frameOptions = {}, o
   if (!sourceMac || !isUnicastMac(sourceMac)) return drop(state, frame, device, interfaceId, L2_DROP_REASONS.invalidSourceMac);
   if (!destinationMac) return drop(state, frame, device, interfaceId, L2_DROP_REASONS.invalidDestinationMac);
   if (!isInterfaceOperational(device, intf)) return drop(state, frame, device, interfaceId, L2_DROP_REASONS.ingressDown);
-  const queue = new L2EventQueue(options.maxEvents || 256);
+  const queue = new Layer2EventQueue(options.maxEvents || 256);
   queue.enqueue({ type: "frame-forward", frame, deviceId: device.id, interfaceId, direction: "egress" });
   return processEventQueue(state, queue, options);
 }
 
 export function receiveFrame(state, deviceId, interfaceId, frame, options = {}) {
   ensureLayer2State(state);
-  const queue = new L2EventQueue(options.maxEvents || 256);
+  const queue = new Layer2EventQueue(options.maxEvents || 256);
   queue.enqueue({ type: "frame-arrival", frame: cloneEthernetFrame(frame, { currentDeviceId: deviceId, currentInterfaceId: interfaceId }), deviceId, interfaceId });
   return processEventQueue(state, queue, options);
 }
@@ -368,7 +368,7 @@ function result(status, reason, frame) {
   return { ok: status === "success", status, reason, frame };
 }
 
-class L2EventQueue {
+class Layer2EventQueue {
   constructor(limit) { this.items = []; this.head = 0; this.limit = limit; }
   get length() { return this.items.length - this.head; }
   enqueue(event) {
