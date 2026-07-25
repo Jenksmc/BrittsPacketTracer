@@ -1,4 +1,6 @@
 import { attachDeviceDefinitions, hydrateDeviceInterfaces, ROUTED_DEVICE_DEFAULT_UP_INTERFACE_TYPES, physicalInterface, validateLink } from "./connections.js";
+import { BROADCAST_MAC, createFrame, ensureDeviceLayer2State, ensureLayer2State, transmitFrame } from "./switching.js";
+import { normalizeMacAddress, stableInterfaceMac } from "../protocols/ethernet.js";
 
 export const DEVICE_CATEGORIES = {
   routers: "Routers",
@@ -57,7 +59,7 @@ export function defaultDevice(type, id, x, y, count) {
   const prefix = def.short.replace(/\s+/g, "");
   const hostname = `${prefix}${count}`;
   const routed = ["router","firewall","multilayer-switch"].includes(def.kind);
-  return {
+  const device = {
     id, type, kind: def.kind, name: hostname, x, y, enabled: true,
     model: def.label,
     capabilities: { cli: cliKinds.has(def.kind), desktop: desktopKinds.has(def.kind), physical:true, config:true },
@@ -67,20 +69,22 @@ export function defaultDevice(type, id, x, y, count) {
       interfaces: Object.fromEntries(def.ports.map(p => {
         const intf = physicalInterface(p, def);
         intf.shutdown = routed && !ROUTED_DEVICE_DEFAULT_UP_INTERFACE_TYPES.has(intf.interfaceType);
-        intf.mac = randomMac();
+        intf.mac = stableInterfaceMac({ id }, p);
         return [p, intf];
       })),
       vlans:{1:{id:1,name:"default"}}, routes:[], ipv6Routes:[],
       ospf:{processId:null,routerId:"",networks:[],neighbors:[]}, rip:{version:2,networks:[]},
       eigrp:{asn:null,networks:[]}, bgp:{asn:null,neighbors:[],networks:[]},
       stp:{mode:"pvst",priority:32768}, etherChannels:[],
-      dhcpPools:[], dns:[], nat:[], acls:[], arpTable:[], macTable:[],
+      dhcpPools:[], dns:[], nat:[], acls:[], arpTable:[], macTable:[], macAgingTimeMs:300000, l2Counters:{},
       ipSettings:{ip:"",mask:"",gateway:"",dns:"",dhcp:false,ipv6:"",ipv6Gateway:"",slaac:false},
       wireless:{ssid:"PacketTracer",security:"none",password:"",channel:"auto"},
       services:{http:false,https:false,dns:false,dhcp:false,ftp:false,email:false},
       physical:{modules:[],power:true}, enableSecret:"", banner:""
     }
   };
+  ensureDeviceLayer2State(device);
+  return device;
 }
 
 export function randomMac(){ return Array.from({length:6},(_,i)=>((i===0?0x02:Math.floor(Math.random()*256))).toString(16).padStart(2,"0")).join(":").toUpperCase(); }
@@ -92,6 +96,7 @@ export function neighbors(state,deviceId){ const out=[]; for(const link of state
 function linkOperational(state,link){ const result=validateLink(state,link); link.status=result.reason; return result.ok; }
 export function computeLinkStates(state){
   attachDeviceDefinitions(state.devices,DEVICE_TYPES);
+  ensureLayer2State(state);
   state.devices.forEach(d=>Object.values(d.config.interfaces||{}).forEach(i=>{i.linkState="down";i.administrativeState=i.shutdown?"down":"up"}));
   state.links.forEach(l=>{
     l.up=linkOperational(state,l);
@@ -100,9 +105,34 @@ export function computeLinkStates(state){
       if(intf)intf.linkState=l.up?"up":"down";
     }
   });
-  state.devices.forEach(d=>hydrateDeviceInterfaces(d,DEVICE_TYPES[d.type]));
+  state.devices.forEach(d=>{hydrateDeviceInterfaces(d,DEVICE_TYPES[d.type]);ensureDeviceLayer2State(d)});
 }
-export function simulatePing(state,sourceId,destIp){ computeLinkStates(state); const source=state.devices.find(d=>d.id===sourceId),target=findDeviceByIp(state,destIp); if(!source)return {ok:false,output:"Invalid source device."}; if(!target)return {ok:false,output:`Pinging ${destIp} with 32 bytes of data:\nRequest timed out.\n\nPing statistics for ${destIp}:\n    Packets: Sent = 4, Received = 0, Lost = 4 (100% loss)`}; const visited=new Set(),queue=[source.id],parent=new Map(); while(queue.length){ const id=queue.shift(); if(id===target.device.id){ const path=[]; let cur=id; while(cur){path.unshift(cur);cur=parent.get(cur);} learnAlongPath(state,path,target.device); return {ok:true,path,output:`Pinging ${destIp} with 32 bytes of data:\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\n\nPing statistics for ${destIp}:\n    Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)`}; } if(visited.has(id))continue; visited.add(id); const dev=state.devices.find(d=>d.id===id); for(const n of neighbors(state,id)){ if(!n.link.up||visited.has(n.device.id))continue; const li=dev.config.interfaces[n.local.port],ri=n.device.config.interfaces[n.remote.port]; const vlanOK=li.mode==="trunk"||ri.mode==="trunk"||li.vlan===ri.vlan; if(vlanOK){parent.set(n.device.id,id);queue.push(n.device.id);} }} return {ok:false,output:`Pinging ${destIp} with 32 bytes of data:\nRequest timed out.\nDestination host unreachable.`}; }
+export function simulatePing(state,sourceId,destIp){ computeLinkStates(state); const source=state.devices.find(d=>d.id===sourceId),target=findDeviceByIp(state,destIp); if(!source)return {ok:false,output:"Invalid source device."}; if(!target)return {ok:false,output:`Pinging ${destIp} with 32 bytes of data:\nRequest timed out.\n\nPing statistics for ${destIp}:\n    Packets: Sent = 4, Received = 0, Lost = 4 (100% loss)`}; const visited=new Set(),queue=[source.id],parent=new Map(),parentPort=new Map(); while(queue.length){ const id=queue.shift(); if(id===target.device.id){ const path=[]; let cur=id; while(cur){path.unshift(cur);cur=parent.get(cur);} const l2=simulatePingFrame(state,source,target.device,destIp); if(!l2.ok){ return {ok:false,path,l2,output:`Pinging ${destIp} with 32 bytes of data:\nRequest timed out.\nDestination host unreachable.`}; } learnAlongPath(state,path,target.device); return {ok:true,path,l2,output:`Pinging ${destIp} with 32 bytes of data:\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\n\nPing statistics for ${destIp}:\n    Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)`}; } if(visited.has(id))continue; visited.add(id); const dev=state.devices.find(d=>d.id===id); for(const n of neighbors(state,id)){ if(!n.link.up||visited.has(n.device.id))continue; const li=dev.config.interfaces[n.local.port],ri=n.device.config.interfaces[n.remote.port]; const vlanOK=li.mode==="trunk"||ri.mode==="trunk"||li.vlan===ri.vlan; if(vlanOK){parent.set(n.device.id,id);parentPort.set(n.device.id,n.remote.port);queue.push(n.device.id);} }} return {ok:false,output:`Pinging ${destIp} with 32 bytes of data:\nRequest timed out.\nDestination host unreachable.`}; }
+function simulatePingFrame(state,source,target,destIp){
+  const sourceIntf=firstEthernetInterface(source),targetIntf=firstEthernetInterface(target);
+  if(!sourceIntf||!targetIntf)return {ok:false,reason:"No Ethernet-capable interface"};
+  const arp=resolveArp(state,source,sourceIntf,target,targetIntf,destIp);
+  if(!arp.ok)return arp;
+  const frame=createFrame({sourceMac:sourceIntf.mac,destinationMac:targetIntf.mac||BROADCAST_MAC,etherType:"0x0800",payload:{type:"icmp-echo",destinationIp:destIp},vlanId:sourceIntf.vlan||1,ingressDeviceId:source.id,ingressInterfaceId:sourceIntf.name});
+  const result=transmitFrame(state,source.id,sourceIntf.name,frame);
+  return {...result,ok:result.deliveries?.some(d=>d.device.id===target.id)||false};
+}
+function resolveArp(state,source,sourceIntf,target,targetIntf,destIp){
+  source.config.arpTable ||= [];
+  target.config.arpTable ||= [];
+  const existing=source.config.arpTable.find(e=>e.ip===destIp&&normalizeMacAddress(e.mac)===normalizeMacAddress(targetIntf.mac));
+  if(existing)return {ok:true,cached:true};
+  const request=transmitFrame(state,source.id,sourceIntf.name,{destinationMac:BROADCAST_MAC,etherType:"0x0806",payload:{type:"arp-request",senderIp:interfaceIp(source,sourceIntf),senderMac:sourceIntf.mac,targetIp:destIp},vlanId:sourceIntf.vlan||1});
+  if(!request.deliveries?.some(d=>d.device.id===target.id))return {...request,ok:false,reason:"ARP request did not reach target"};
+  const reply=transmitFrame(state,target.id,targetIntf.name,{destinationMac:sourceIntf.mac,etherType:"0x0806",payload:{type:"arp-reply",senderIp:destIp,senderMac:targetIntf.mac,targetIp:interfaceIp(source,sourceIntf),targetMac:sourceIntf.mac},vlanId:targetIntf.vlan||1});
+  if(!reply.deliveries?.some(d=>d.device.id===source.id))return {...reply,ok:false,reason:"ARP reply did not reach source"};
+  upsertArp(source,destIp,targetIntf.mac,sourceIntf.name);
+  upsertArp(target,interfaceIp(source,sourceIntf),sourceIntf.mac,targetIntf.name);
+  return {ok:true,request,reply};
+}
+function upsertArp(device,ip,mac,intfName){ if(!ip)return; const table=device.config.arpTable; const entry=table.find(e=>e.ip===ip); if(entry){entry.mac=mac;entry.interface=intfName;entry.type="dynamic";}else table.push({ip,mac,type:"dynamic",interface:intfName}); }
+function interfaceIp(device,intf){ return intf.ip || device.config.ipSettings?.ip || ""; }
+function firstEthernetInterface(d){ return Object.values(d.config.interfaces||{}).find(i=>["ethernet","fiberEthernet","wireless"].includes(i.interfaceType)&&normalizeMacAddress(i.mac)); }
 function learnAlongPath(state,path,target){
   for(let i=0;i<path.length;i++){
     const d=state.devices.find(x=>x.id===path[i]);

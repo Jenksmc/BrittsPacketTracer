@@ -1,0 +1,228 @@
+import assert from "node:assert/strict";
+import { CLI } from "../cli/cli.js";
+import { DEVICE_TYPES, computeLinkStates, defaultDevice, simulatePing } from "./network.js";
+import { attachDeviceDefinitions, canConnectPorts, validateLink } from "./connections.js";
+import { addStaticMacEntry, clearDynamicMacEntries, learnSourceMac, lookupMacEntry, transmitFrame } from "./switching.js";
+import { BROADCAST_MAC, createEthernetFrame, isBroadcastMac, isMulticastMac, isUnicastMac, normalizeMacAddress } from "../protocols/ethernet.js";
+
+function devices(...types) {
+  const list = types.map((type, index) => defaultDevice(type, `d${index}`, 0, 0, index + 1));
+  attachDeviceDefinitions(list, DEVICE_TYPES);
+  return list;
+}
+
+function link(state, a, aPort, b, bPort, id = `l${state.links.length + 1}`) {
+  const cableType = "copperStraightThrough";
+  state.links.push({ id, cableType, resolvedCableType: cableType, a: { deviceId: a.id, port: aPort }, b: { deviceId: b.id, port: bPort }, up: false });
+  a.config.interfaces[aPort].connectedLinkId = id;
+  b.config.interfaces[bPort].connectedLinkId = id;
+  a.config.interfaces[aPort].cableConnection = id;
+  b.config.interfaces[bPort].cableConnection = id;
+}
+
+{
+  assert.equal(normalizeMacAddress("0011.2233.4455"), "00:11:22:33:44:55");
+  assert.equal(normalizeMacAddress("00-11-22-33-44-55"), "00:11:22:33:44:55");
+  assert.equal(normalizeMacAddress("001122334455"), "00:11:22:33:44:55");
+  assert.equal(isBroadcastMac(BROADCAST_MAC), true);
+  assert.equal(isMulticastMac("01:00:5e:00:00:01"), true);
+  assert.equal(isUnicastMac("00:11:22:33:44:55"), true);
+}
+
+{
+  const frame = createEthernetFrame({ sourceMac: "0011.2233.4455", destinationMac: BROADCAST_MAC, payload: "hello", vlanId: 10 });
+  assert.ok(frame.id);
+  assert.equal(frame.sourceMac, "00:11:22:33:44:55");
+  assert.equal(frame.isBroadcast, true);
+  assert.equal(frame.vlanId, 10);
+  assert.equal(frame.payload, "hello");
+  assert.ok(frame.size >= 64);
+}
+
+{
+  const [sw] = devices("switch2960");
+  const first = learnSourceMac(sw, "00:11:22:33:44:55", 1, "FastEthernet0/1", 1000);
+  assert.equal(first.interfaceId, "FastEthernet0/1");
+  const refreshed = learnSourceMac(sw, "00:11:22:33:44:55", 1, "FastEthernet0/2", 2000);
+  assert.equal(refreshed.interfaceId, "FastEthernet0/2");
+  assert.equal(refreshed.lastSeenAt, 2000);
+  learnSourceMac(sw, BROADCAST_MAC, 1, "FastEthernet0/3");
+  assert.equal(sw.config.macTable.length, 1);
+  addStaticMacEntry(sw, "00:aa:bb:cc:dd:ee", 20, "FastEthernet0/4", 3000);
+  assert.equal(lookupMacEntry(sw, "00:aa:bb:cc:dd:ee", 20).type, "STATIC");
+  clearDynamicMacEntries(sw);
+  assert.equal(sw.config.macTable.length, 1);
+  learnSourceMac(sw, "00:11:22:33:44:55", 1, "FastEthernet0/2", 4000);
+  learnSourceMac(sw, "00:11:22:33:44:66", 2, "FastEthernet0/3", 4000);
+  assert.equal(clearDynamicMacEntries(sw, { vlan: 1 }), 1);
+  assert.equal(lookupMacEntry(sw, "00:11:22:33:44:66", 2).interfaceId, "FastEthernet0/3");
+  assert.equal(clearDynamicMacEntries(sw, { interfaceId: "FastEthernet0/3" }), 1);
+  assert.equal(sw.config.macTable.length, 1);
+}
+
+{
+  const [pc1, sw, pc2] = devices("pc", "switch2960", "pc");
+  const state = { devices: [pc1, sw, pc2], links: [] };
+  link(state, pc1, "FastEthernet0", sw, "FastEthernet0/1");
+  link(state, sw, "FastEthernet0/2", pc2, "FastEthernet0");
+  computeLinkStates(state);
+  const result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: pc2.config.interfaces.FastEthernet0.mac, payload: "unknown-unicast" });
+  assert.equal(result.deliveries.some(d => d.device.id === pc2.id), true);
+  assert.equal(lookupMacEntry(sw, pc1.config.interfaces.FastEthernet0.mac, 1).interfaceId, "FastEthernet0/1");
+  assert.equal(sw.config.interfaces["FastEthernet0/1"].counters.framesReceived, 1);
+  const known = transmitFrame(state, pc2.id, "FastEthernet0", { destinationMac: pc1.config.interfaces.FastEthernet0.mac, payload: "known-unicast" });
+  assert.equal(known.deliveries.some(d => d.device.id === pc1.id), true);
+  assert.equal(known.events.filter(e => e.type === "frame-arrival" && e.deviceId === pc1.id).length, 1);
+}
+
+{
+  const [pc1, sw, pc2] = devices("pc", "switch2960", "pc");
+  const state = { devices: [pc1, sw, pc2], links: [] };
+  pc2.config.interfaces.FastEthernet0.vlan = 20;
+  sw.config.interfaces["FastEthernet0/2"].vlan = 20;
+  link(state, pc1, "FastEthernet0", sw, "FastEthernet0/1");
+  link(state, sw, "FastEthernet0/2", pc2, "FastEthernet0");
+  computeLinkStates(state);
+  const result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: BROADCAST_MAC, payload: "broadcast" });
+  assert.equal(result.deliveries.some(d => d.device.id === pc2.id), false);
+}
+
+{
+  const [pc1, hub, pc2] = devices("pc", "hub", "pc");
+  const state = { devices: [pc1, hub, pc2], links: [] };
+  link(state, pc1, "FastEthernet0", hub, "Port1");
+  link(state, hub, "Port2", pc2, "FastEthernet0");
+  computeLinkStates(state);
+  const result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: pc2.config.interfaces.FastEthernet0.mac, payload: "hub-repeat" });
+  assert.equal(result.deliveries.some(d => d.device.id === pc2.id), true);
+  assert.equal(hub.config.macTable.length, 0);
+}
+
+{
+  const [pc1, router, pc2] = devices("pc", "router1941", "pc");
+  const state = { devices: [pc1, router, pc2], links: [] };
+  router.config.interfaces["GigabitEthernet0/0"].shutdown = false;
+  router.config.interfaces["GigabitEthernet0/1"].shutdown = false;
+  link(state, pc1, "FastEthernet0", router, "GigabitEthernet0/0");
+  link(state, router, "GigabitEthernet0/1", pc2, "FastEthernet0");
+  computeLinkStates(state);
+  const result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: pc2.config.interfaces.FastEthernet0.mac, payload: "not-bridged" });
+  assert.equal(result.deliveries.some(d => d.device.id === pc2.id), false);
+  assert.equal(result.drops.some(d => d.reason === "router-unrelated-unicast"), true);
+}
+
+{
+  const [pc, sw] = devices("pc", "switch2960");
+  const state = { devices: [pc, sw], links: [] };
+  link(state, pc, "FastEthernet0", sw, "FastEthernet0/1");
+  computeLinkStates(state);
+  sw.config.interfaces["FastEthernet0/1"].speed = "1G";
+  assert.equal(validateLink(state, state.links[0]).ok, false);
+  assert.match(validateLink(state, state.links[0]).reason, /Speed mismatch/);
+  assert.equal(canConnectPorts("fiber", pc, pc.config.interfaces.FastEthernet0, sw, sw.config.interfaces["FastEthernet0/1"]).ok, false);
+}
+
+{
+  const [sw] = devices("switch2960");
+  const cli = new CLI({ devices: [sw], links: [] }, sw, null);
+  cli.mode = "config";
+  assert.equal(cli.execute("mac address-table static 0011.2233.4455 vlan 1 interface fa0/1"), "");
+  cli.mode = "privileged";
+  assert.match(cli.execute("show mac address-table static"), /0011\.2233\.4455/);
+  assert.match(cli.execute("show mac address-table interface fa0/1"), /Fa|Fast|0011/);
+  assert.match(cli.execute("clear mac address-table dynamic"), /0 dynamic/);
+}
+
+{
+  const [pc1, sw1, sw2, pc2] = devices("pc", "switch2960", "switch2960", "pc");
+  const state = { devices: [pc1, sw1, sw2, pc2], links: [] };
+  sw1.config.interfaces["FastEthernet0/1"].vlan = 10;
+  sw1.config.interfaces["FastEthernet0/2"].mode = "trunk";
+  sw1.config.interfaces["FastEthernet0/2"].allowedVlans = "10";
+  sw2.config.interfaces["FastEthernet0/1"].mode = "trunk";
+  sw2.config.interfaces["FastEthernet0/1"].allowedVlans = "10";
+  sw2.config.interfaces["FastEthernet0/2"].vlan = 10;
+  link(state, pc1, "FastEthernet0", sw1, "FastEthernet0/1");
+  link(state, sw1, "FastEthernet0/2", sw2, "FastEthernet0/1");
+  link(state, sw2, "FastEthernet0/2", pc2, "FastEthernet0");
+  computeLinkStates(state);
+  let result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: pc2.config.interfaces.FastEthernet0.mac, payload: "trunk-vlan10" });
+  assert.equal(result.deliveries.some(d => d.device.id === pc2.id), true);
+  sw1.config.interfaces["FastEthernet0/2"].allowedVlans = "20";
+  result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: pc2.config.interfaces.FastEthernet0.mac, payload: "blocked-vlan10" });
+  assert.equal(result.deliveries.some(d => d.device.id === pc2.id), false);
+}
+
+{
+  const [pc1, sw, pc2] = devices("pc", "switch2960", "pc");
+  const state = { devices: [pc1, sw, pc2], links: [] };
+  link(state, pc1, "FastEthernet0", sw, "FastEthernet0/1");
+  link(state, sw, "FastEthernet0/2", pc2, "FastEthernet0");
+  computeLinkStates(state);
+  sw.config.interfaces["FastEthernet0/2"].stpState = "blocking";
+  let result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: BROADCAST_MAC, payload: "blocked-by-stp" });
+  assert.equal(result.deliveries.some(d => d.device.id === pc2.id), false);
+  sw.config.interfaces["FastEthernet0/2"].stpState = "forwarding";
+  result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: BROADCAST_MAC, payload: "forwarded-by-stp" });
+  assert.equal(result.deliveries.some(d => d.device.id === pc2.id), true);
+}
+
+{
+  const [pc1, sw1, sw2, pc2] = devices("pc", "switch2960", "switch2960", "pc");
+  const state = { devices: [pc1, sw1, sw2, pc2], links: [] };
+  sw1.config.interfaces["FastEthernet0/2"].channelGroup = 1;
+  sw1.config.interfaces["FastEthernet0/3"].channelGroup = 1;
+  sw2.config.interfaces["FastEthernet0/1"].channelGroup = 1;
+  sw2.config.interfaces["FastEthernet0/2"].channelGroup = 1;
+  link(state, pc1, "FastEthernet0", sw1, "FastEthernet0/1");
+  link(state, sw1, "FastEthernet0/2", sw2, "FastEthernet0/1");
+  link(state, sw1, "FastEthernet0/3", sw2, "FastEthernet0/2");
+  link(state, sw2, "FastEthernet0/3", pc2, "FastEthernet0");
+  computeLinkStates(state);
+  const result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: pc2.config.interfaces.FastEthernet0.mac, payload: "etherchannel" });
+  assert.equal(result.deliveries.some(d => d.device.id === pc2.id), true);
+  assert.equal(sw1.config.interfaces["FastEthernet0/3"].counters.framesTransmitted || 0, 0);
+}
+
+{
+  const [pc1, sw, pc2] = devices("pc", "switch2960", "pc");
+  const state = { devices: [pc1, sw, pc2], links: [] };
+  pc1.config.interfaces.FastEthernet0.ip = "192.0.2.10";
+  pc2.config.interfaces.FastEthernet0.ip = "192.0.2.20";
+  link(state, pc1, "FastEthernet0", sw, "FastEthernet0/1");
+  link(state, sw, "FastEthernet0/2", pc2, "FastEthernet0");
+  const result = simulatePing(state, pc1.id, "192.0.2.20");
+  assert.equal(result.ok, true);
+  assert.equal(pc1.config.arpTable.some(e => e.ip === "192.0.2.20" && normalizeMacAddress(e.mac) === normalizeMacAddress(pc2.config.interfaces.FastEthernet0.mac)), true);
+  assert.equal(state.l2Events.some(e => e.destinationMac === BROADCAST_MAC), true);
+}
+
+{
+  const [sw] = devices("switch2960");
+  const cli = new CLI({ devices: [sw], links: [] }, sw, null);
+  cli.mode = "config";
+  assert.equal(cli.execute("spanning-tree mode rapid-pvst"), "");
+  assert.equal(cli.execute("interface fa0/1"), "");
+  assert.equal(cli.execute("switchport mode dynamic desirable"), "");
+  assert.equal(cli.execute("switchport trunk native vlan 99"), "");
+  assert.equal(cli.execute("switchport trunk allowed vlan 10,20"), "");
+  assert.equal(cli.execute("switchport trunk allowed vlan add 30"), "");
+  assert.equal(cli.execute("channel-group 1 mode active"), "");
+  assert.equal(cli.execute("spanning-tree port-state blocking"), "");
+  assert.equal(sw.config.interfaces["FastEthernet0/1"].allowedVlans, "10,20,30");
+  cli.mode = "privileged";
+  assert.match(cli.execute("show spanning-tree"), /rapid-pvst/);
+  assert.match(cli.execute("show etherchannel summary"), /Po1/);
+}
+
+{
+  const [pc1, sw, pc2] = devices("pc", "switch2960", "pc");
+  const state = { devices: [pc1, sw, pc2], links: [] };
+  link(state, pc1, "FastEthernet0", sw, "FastEthernet0/1");
+  link(state, sw, "FastEthernet0/2", pc2, "FastEthernet0");
+  computeLinkStates(state);
+  const result = transmitFrame(state, pc1.id, "FastEthernet0", { destinationMac: pc2.config.interfaces.FastEthernet0.mac, traversalBudget: 1 });
+  assert.equal(result.drops.some(d => d.reason === "loop-safety-limit"), true);
+}
+
+console.log("switching.test.mjs passed");

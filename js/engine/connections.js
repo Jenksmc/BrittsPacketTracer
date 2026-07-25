@@ -31,7 +31,9 @@ export function interfaceMetadata(name, deviceDef = {}) {
     connectorType: "rj45",
     layerCapabilities: [1, 2],
     speed: "auto",
+    supportedSpeeds: ["10M", "100M"],
     duplex: "auto",
+    supportedDuplex: ["half", "full"],
     administrativeState: "up",
     linkState: "down",
     autoNegotiation: true,
@@ -49,15 +51,15 @@ export function interfaceMetadata(name, deviceDef = {}) {
     const connectorType = compact === "rs232" ? "rs232" : "console";
     Object.assign(meta, { interfaceType: "console", connectorType, speed: "9600", duplex: "full", autoNegotiation: false });
   }
-  else if (compact.startsWith("wireless") || compact.startsWith("cellular")) Object.assign(meta, { interfaceType: "wireless", connectorType: "wireless", speed: "auto", duplex: "full" });
+  else if (compact.startsWith("wireless") || compact.startsWith("cellular")) Object.assign(meta, { interfaceType: "wireless", connectorType: "wireless", speed: "auto", supportedSpeeds: ["11M", "54M", "150M"], duplex: "full", supportedDuplex: ["full"] });
   else if (compact.startsWith("coaxial")) Object.assign(meta, { interfaceType: "coaxial", connectorType: "coax" });
   else if (compact.startsWith("phone") || compact.startsWith("dsl")) Object.assign(meta, { interfaceType: "phone", connectorType: "rj11" });
   else if (compact.startsWith("usb")) Object.assign(meta, { interfaceType: "usb", connectorType: "usb" });
   else if (compact.startsWith("digital") || compact.startsWith("analog")) Object.assign(meta, { interfaceType: "iot", connectorType: "iot-custom", speed: "signal", duplex: "simplex", autoNegotiation: false });
-  else if (compact.startsWith("tengigabitethernet")) Object.assign(meta, { interfaceType: "fiberEthernet", connectorType: "sfp", speed: "10G" });
-  else if (isSfpUplink) Object.assign(meta, { interfaceType: "fiberEthernet", connectorType: "sfp", speed: "1G" });
-  else if (compact.startsWith("fastethernet")) meta.speed = "100M";
-  else if (compact.startsWith("gigabitethernet")) meta.speed = "1G";
+  else if (compact.startsWith("tengigabitethernet")) Object.assign(meta, { interfaceType: "fiberEthernet", connectorType: "sfp", speed: "auto", supportedSpeeds: ["1G", "10G"] });
+  else if (isSfpUplink) Object.assign(meta, { interfaceType: "fiberEthernet", connectorType: "sfp", speed: "auto", supportedSpeeds: ["1G"] });
+  else if (compact.startsWith("fastethernet")) Object.assign(meta, { speed: "auto", supportedSpeeds: ["10M", "100M"] });
+  else if (compact.startsWith("gigabitethernet")) Object.assign(meta, { speed: "auto", supportedSpeeds: ["10M", "100M", "1G"] });
 
   if (deviceDef.kind === "cell-tower" && meta.interfaceType === "wireless") meta.layerCapabilities = [1];
   return meta;
@@ -79,7 +81,9 @@ export function physicalInterface(name, deviceDef = {}) {
     description: "",
     connectedLinkId: null,
     mac: null,
-    cableConnection: null
+    cableConnection: null,
+    counters: {},
+    modulePresent: true
   };
 }
 
@@ -172,7 +176,53 @@ export function validateLink(state, link) {
   if (!bDevice.enabled || !bDevice.config.physical?.power) return { ok: false, reason: `${bDevice.name} is powered off.` };
   if (aPort.shutdown) return { ok: false, reason: `${aDevice.name} ${aPort.name} is administratively down.` };
   if (bPort.shutdown) return { ok: false, reason: `${bDevice.name} ${bPort.name} is administratively down.` };
+  if (aPort.modulePresent === false) return { ok: false, reason: `${aDevice.name} ${aPort.name} module is not present.` };
+  if (bPort.modulePresent === false) return { ok: false, reason: `${bDevice.name} ${bPort.name} module is not present.` };
+  const negotiation = negotiateLinkSettings(aPort, bPort);
+  if (!negotiation.ok) return negotiation;
+  aPort.negotiatedSpeed = bPort.negotiatedSpeed = negotiation.speed;
+  aPort.negotiatedDuplex = bPort.negotiatedDuplex = negotiation.duplex;
+  aPort.duplexMismatch = bPort.duplexMismatch = negotiation.duplexMismatch;
   return { ok: true, reason: "Up/up" };
+}
+
+export function negotiateLinkSettings(aPort, bPort) {
+  if (!ethernetLike(aPort) || !ethernetLike(bPort)) return { ok: true, speed: aPort?.speed || bPort?.speed || "n/a", duplex: aPort?.duplex || bPort?.duplex || "n/a", duplexMismatch: false };
+  const aSpeed = configuredValue(aPort.speed), bSpeed = configuredValue(bPort.speed);
+  const aSpeeds = supportedSpeeds(aPort), bSpeeds = supportedSpeeds(bPort);
+  let speed = null;
+  if (aSpeed && bSpeed) speed = aSpeed === bSpeed ? aSpeed : null;
+  else if (aSpeed) speed = bSpeeds.includes(aSpeed) ? aSpeed : null;
+  else if (bSpeed) speed = aSpeeds.includes(bSpeed) ? bSpeed : null;
+  else speed = highestCommon(aSpeeds, bSpeeds);
+  if (!speed) return { ok: false, reason: `Speed mismatch between ${aPort.name} and ${bPort.name}.` };
+  const aDuplex = configuredValue(aPort.duplex), bDuplex = configuredValue(bPort.duplex);
+  const aDuplexes = supportedDuplex(aPort), bDuplexes = supportedDuplex(bPort);
+  let duplex = null, duplexMismatch = false;
+  if (aDuplex && bDuplex) { duplex = aDuplex === bDuplex ? aDuplex : `${aDuplex}/${bDuplex}`; duplexMismatch = aDuplex !== bDuplex; }
+  else if (aDuplex) duplex = bDuplexes.includes(aDuplex) ? aDuplex : null;
+  else if (bDuplex) duplex = aDuplexes.includes(bDuplex) ? bDuplex : null;
+  else duplex = aDuplexes.includes("full") && bDuplexes.includes("full") ? "full" : highestCommon(aDuplexes, bDuplexes, DUPLEX_ORDER);
+  if (!duplex) return { ok: false, reason: `Duplex mismatch between ${aPort.name} and ${bPort.name}.` };
+  return { ok: true, speed, duplex, duplexMismatch };
+}
+
+function ethernetLike(intf) { return ["ethernet", "fiberEthernet", "wireless"].includes(intf?.interfaceType); }
+function configuredValue(value) { const v = String(value || "auto").toLowerCase(); return v === "auto" ? null : value; }
+function supportedSpeeds(intf) { return intf.supportedSpeeds || (intf.speed && intf.speed !== "auto" ? [intf.speed] : ["10M", "100M"]); }
+function supportedDuplex(intf) { return intf.supportedDuplex || (intf.duplex && intf.duplex !== "auto" ? [intf.duplex] : ["half", "full"]); }
+const SPEED_ORDER = new Map(["10M", "11M", "54M", "100M", "150M", "1G", "10G"].map((value, index) => [value, index]));
+const DUPLEX_ORDER = new Map(["half", "full"].map((value, index) => [value, index]));
+function highestCommon(a, b, order = SPEED_ORDER) {
+  const left = new Set(a), right = new Set(b);
+  let best = null, bestRank = -1;
+  for (const [value, rank] of order) {
+    if (rank > bestRank && left.has(value) && right.has(value)) {
+      best = value;
+      bestRank = rank;
+    }
+  }
+  return best;
 }
 
 function automaticCableForPair(aDevice, aPort, bDevice, bPort) {
