@@ -89,5 +89,19 @@ export function neighbors(state,deviceId){ const out=[]; for(const link of state
 function linkOperational(state,link){ const a=state.devices.find(d=>d.id===link.a.deviceId),b=state.devices.find(d=>d.id===link.b.deviceId); if(!a||!b)return false; return interfaceUp(a,a.config.interfaces[link.a.port])&&interfaceUp(b,b.config.interfaces[link.b.port]); }
 export function computeLinkStates(state){ state.links.forEach(l=>l.up=linkOperational(state,l)); }
 export function simulatePing(state,sourceId,destIp){ computeLinkStates(state); const source=state.devices.find(d=>d.id===sourceId),target=findDeviceByIp(state,destIp); if(!source)return {ok:false,output:"Invalid source device."}; if(!target)return {ok:false,output:`Pinging ${destIp} with 32 bytes of data:\nRequest timed out.\n\nPing statistics for ${destIp}:\n    Packets: Sent = 4, Received = 0, Lost = 4 (100% loss)`}; const visited=new Set(),queue=[source.id],parent=new Map(); while(queue.length){ const id=queue.shift(); if(id===target.device.id){ const path=[]; let cur=id; while(cur){path.unshift(cur);cur=parent.get(cur);} learnAlongPath(state,path,target.device); return {ok:true,path,output:`Pinging ${destIp} with 32 bytes of data:\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\n\nPing statistics for ${destIp}:\n    Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)`}; } if(visited.has(id))continue; visited.add(id); const dev=state.devices.find(d=>d.id===id); for(const n of neighbors(state,id)){ if(!n.link.up||visited.has(n.device.id))continue; const li=dev.config.interfaces[n.local.port],ri=n.device.config.interfaces[n.remote.port]; const vlanOK=li.mode==="trunk"||ri.mode==="trunk"||li.vlan===ri.vlan; if(vlanOK){parent.set(n.device.id,id);queue.push(n.device.id);} }} return {ok:false,output:`Pinging ${destIp} with 32 bytes of data:\nRequest timed out.\nDestination host unreachable.`}; }
-function learnAlongPath(state,path,target){ for(let i=0;i<path.length;i++){ const d=state.devices.find(x=>x.id===path[i]); if(!d)continue; if(["switch","multilayer-switch","bridge"].includes(DEVICE_TYPES[d.type].kind)){ const next=path[i+1]||target.id; const n=neighbors(state,d.id).find(x=>x.device.id===next),localIntf=n&&d.config.interfaces[n.local.port]; if(n&&!d.config.macTable.some(e=>e.mac===firstMac(target)))d.config.macTable.push({vlan:(localIntf&&localIntf.vlan)||1,mac:firstMac(target),port:n.local.port,type:"DYNAMIC"}); } const targetIntf=Object.values(target.config.interfaces).find(x=>x.ip),ip=(target.config.ipSettings&&target.config.ipSettings.ip)||(targetIntf&&targetIntf.ip); if(ip&&!d.config.arpTable.some(e=>e.ip===ip))d.config.arpTable.push({ip,mac:firstMac(target),type:"dynamic"}); }}
+function learnAlongPath(state,path,target){
+  for(let i=0;i<path.length;i++){
+    const d=state.devices.find(x=>x.id===path[i]);
+    if(!d)continue;
+    if(["switch","multilayer-switch","bridge"].includes(DEVICE_TYPES[d.type].kind)){
+      const next=path[i+1]||target.id;
+      const n=neighbors(state,d.id).find(x=>x.device.id===next);
+      const localIntf=n&&d.config.interfaces[n.local.port];
+      if(n&&!d.config.macTable.some(e=>e.mac===firstMac(target)))d.config.macTable.push({vlan:(localIntf&&localIntf.vlan)||1,mac:firstMac(target),port:n.local.port,type:"DYNAMIC"});
+    }
+    const targetIntf=Object.values(target.config.interfaces).find(x=>x.ip);
+    const ip=(target.config.ipSettings&&target.config.ipSettings.ip)||(targetIntf&&targetIntf.ip);
+    if(ip&&!d.config.arpTable.some(e=>e.ip===ip))d.config.arpTable.push({ip,mac:firstMac(target),type:"dynamic"});
+  }
+}
 function firstMac(d){ const intf=Object.values(d.config.interfaces)[0]; return (intf&&intf.mac)||randomMac(); }
