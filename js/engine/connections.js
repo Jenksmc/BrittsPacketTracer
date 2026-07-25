@@ -15,7 +15,7 @@ export const CONNECTION_TYPES = [
 ];
 
 export const CONNECTION_TYPE_MAP = Object.fromEntries(CONNECTION_TYPES.map(c => [c.key, c]));
-export const NON_ROUTED_INTERFACE_TYPES = new Set(["console", "usb"]);
+export const ROUTED_DEVICE_DEFAULT_UP_INTERFACE_TYPES = new Set(["console", "usb"]);
 
 const NETWORK_DEVICE_KINDS = new Set(["router", "switch", "multilayer-switch", "hub", "bridge", "repeater", "firewall", "wireless-router", "access-point"]);
 const END_DEVICE_KINDS = new Set(["pc", "laptop", "server", "printer", "ip-phone", "tablet", "smartphone", "iot", "mcu", "plc", "sensor", "actuator"]);
@@ -43,13 +43,17 @@ export function interfaceMetadata(name, deviceDef = {}) {
   };
 
   if (compact.startsWith("serial")) Object.assign(meta, { interfaceType: "serial", connectorType: "serial", speed: "clocked", duplex: "full", autoNegotiation: false });
-  else if (compact === "console" || compact.startsWith("aux") || compact === "rs232") Object.assign(meta, { interfaceType: "console", connectorType: compact === "rs232" ? "rs232" : "console", speed: "9600", duplex: "full", autoNegotiation: false });
+  else if (compact === "console" || compact.startsWith("aux") || compact === "rs232") {
+    const connectorType = compact === "rs232" ? "rs232" : "console";
+    Object.assign(meta, { interfaceType: "console", connectorType, speed: "9600", duplex: "full", autoNegotiation: false });
+  }
   else if (compact.startsWith("wireless") || compact.startsWith("cellular")) Object.assign(meta, { interfaceType: "wireless", connectorType: "wireless", speed: "auto", duplex: "full" });
   else if (compact.startsWith("coaxial")) Object.assign(meta, { interfaceType: "coaxial", connectorType: "coax" });
   else if (compact.startsWith("phone") || compact.startsWith("dsl")) Object.assign(meta, { interfaceType: "phone", connectorType: "rj11" });
   else if (compact.startsWith("usb")) Object.assign(meta, { interfaceType: "usb", connectorType: "usb" });
   else if (compact.startsWith("digital") || compact.startsWith("analog")) Object.assign(meta, { interfaceType: "iot", connectorType: "iot-custom", speed: "signal", duplex: "simplex", autoNegotiation: false });
-  else if (isSfpUplink || compact.startsWith("tengigabitethernet")) Object.assign(meta, { interfaceType: "fiberEthernet", connectorType: "sfp", speed: compact.startsWith("tengigabit") ? "10G" : "1G" });
+  else if (compact.startsWith("tengigabitethernet")) Object.assign(meta, { interfaceType: "fiberEthernet", connectorType: "sfp", speed: "10G" });
+  else if (isSfpUplink) Object.assign(meta, { interfaceType: "fiberEthernet", connectorType: "sfp", speed: "1G" });
   else if (compact.startsWith("fastethernet")) meta.speed = "100M";
   else if (compact.startsWith("gigabitethernet")) meta.speed = "1G";
 
@@ -65,7 +69,7 @@ export function physicalInterface(name, deviceDef = {}) {
     ip: "",
     mask: "",
     ipv6: "",
-    shutdown: ["router", "firewall", "multilayer-switch"].includes(deviceDef.kind) && !NON_ROUTED_INTERFACE_TYPES.has(meta.interfaceType),
+    shutdown: ["router", "firewall", "multilayer-switch"].includes(deviceDef.kind) && !ROUTED_DEVICE_DEFAULT_UP_INTERFACE_TYPES.has(meta.interfaceType),
     vlan: 1,
     nativeVlan: 1,
     allowedVlans: "1-4094",
