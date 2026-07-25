@@ -19,6 +19,8 @@ export const ROUTED_DEVICE_DEFAULT_UP_INTERFACE_TYPES = new Set(["console", "usb
 
 const NETWORK_DEVICE_KINDS = new Set(["router", "switch", "multilayer-switch", "hub", "bridge", "repeater", "firewall", "wireless-router", "access-point"]);
 const END_DEVICE_KINDS = new Set(["pc", "laptop", "server", "printer", "ip-phone", "tablet", "smartphone", "iot", "mcu", "plc", "sensor", "actuator"]);
+const TOPOLOGY_DEVICE_WIDTH = 112;
+const TOPOLOGY_DEVICE_HEIGHT = 78;
 
 export function interfaceMetadata(name, deviceDef = {}) {
   const compact = name.toLowerCase().replace(/\s+/g, "");
@@ -274,7 +276,8 @@ export const ENDPOINT_INDICATORS = {
 };
 
 export function endpointIndicatorFor(state, link, side) {
-  // Keep this priority in sync with docs/PHASE1_COMPATIBILITY_MATRIX.md:
+  // Keep this priority in sync with the Phase 2 endpoint indicator model in
+  // docs/PHASE1_COMPATIBILITY_MATRIX.md:
   // disconnected/power/admin/errors/compatibility before STP and EtherChannel overlays.
   const endpoint = link?.[side];
   if (!endpoint?.deviceId || !endpoint?.port) return ENDPOINT_INDICATORS.disconnected;
@@ -305,7 +308,7 @@ export function endpointIndicatorFor(state, link, side) {
 }
 
 export function devicePortPoint(device, portName, options = {}) {
-  const width = options.width || 112, height = options.height || 78;
+  const width = options.width || TOPOLOGY_DEVICE_WIDTH, height = options.height || TOPOLOGY_DEVICE_HEIGHT;
   const names = Object.keys(device?.config?.interfaces || {});
   const index = Math.max(0, names.indexOf(portName));
   const count = Math.max(1, names.length);

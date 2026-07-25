@@ -222,7 +222,8 @@ export class CLI {
   changed() { if(this.onChange)this.onChange(); }
   interfaceSummary(i) {
     const admin = i.shutdown ? "administratively down" : "up";
-    const protocol = i.shutdown || i.linkState === "down" ? "down" : "up";
+    const carrierUp = i.linkState === undefined ? !i.shutdown : i.linkState === "up";
+    const protocol = i.shutdown || !carrierUp ? "down" : "up";
     return [
       `${i.name} is ${admin}, line protocol is ${protocol}`,
       `  Hardware is ${i.connectorType || "unknown"}, address is ${i.mac || "unknown"}`,
