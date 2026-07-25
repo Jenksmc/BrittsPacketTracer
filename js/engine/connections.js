@@ -214,7 +214,15 @@ function supportedDuplex(intf) { return intf.supportedDuplex || (intf.duplex && 
 const SPEED_ORDER = new Map(["10M", "11M", "54M", "100M", "150M", "1G", "10G"].map((value, index) => [value, index]));
 const DUPLEX_ORDER = new Map(["half", "full"].map((value, index) => [value, index]));
 function highestCommon(a, b, order = SPEED_ORDER) {
-  return [...a].filter(x => b.includes(x)).sort((x, y) => (order.get(y) ?? -1) - (order.get(x) ?? -1))[0] || null;
+  const left = new Set(a), right = new Set(b);
+  let best = null, bestRank = -1;
+  for (const [value, rank] of order) {
+    if (rank > bestRank && left.has(value) && right.has(value)) {
+      best = value;
+      bestRank = rank;
+    }
+  }
+  return best;
 }
 
 function automaticCableForPair(aDevice, aPort, bDevice, bPort) {

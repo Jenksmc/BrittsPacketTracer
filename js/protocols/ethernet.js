@@ -1,6 +1,6 @@
 export const BROADCAST_MAC = "ff:ff:ff:ff:ff:ff";
 export const DEFAULT_ETHERTYPE = "0x0800";
-export const DEFAULT_MAC_AGING_MS = 300000; // 5 minutes.
+export const DEFAULT_MAC_AGING_MS = 300000; // 5 minutes
 export const DEFAULT_FRAME_HOP_LIMIT = 64;
 
 const HEX_MAC = /^[0-9a-f]{12}$/i;

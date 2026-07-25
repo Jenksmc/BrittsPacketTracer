@@ -20,6 +20,7 @@ export const HUB_DEVICE_KINDS = new Set(["hub", "repeater"]);
 export const ROUTED_DEVICE_KINDS = new Set(["router", "firewall"]);
 export const END_DEVICE_KINDS = new Set(["pc", "laptop", "server", "printer", "ip-phone", "tablet", "smartphone", "iot", "mcu", "plc", "sensor", "actuator", "wireless-router", "access-point", "modem", "cloud"]);
 const MAX_L2_EVENT_HISTORY = 200;
+const DEFAULT_MAX_EVENTS = 256;
 
 export const L2_DROP_REASONS = {
   ingressDown: "ingress-interface-down",
@@ -101,14 +102,14 @@ export function transmitFrame(state, deviceId, interfaceId, frameOptions = {}, o
   if (!sourceMac || !isUnicastMac(sourceMac)) return drop(state, frame, device, interfaceId, L2_DROP_REASONS.invalidSourceMac);
   if (!destinationMac) return drop(state, frame, device, interfaceId, L2_DROP_REASONS.invalidDestinationMac);
   if (!isInterfaceOperational(device, intf)) return drop(state, frame, device, interfaceId, L2_DROP_REASONS.ingressDown);
-  const queue = new Layer2EventQueue(options.maxEvents || 256);
+  const queue = new Layer2EventQueue(options.maxEvents || DEFAULT_MAX_EVENTS);
   queue.enqueue({ type: "frame-forward", frame, deviceId: device.id, interfaceId, direction: "egress" });
   return processEventQueue(state, queue, options);
 }
 
 export function receiveFrame(state, deviceId, interfaceId, frame, options = {}) {
   ensureLayer2State(state);
-  const queue = new Layer2EventQueue(options.maxEvents || 256);
+  const queue = new Layer2EventQueue(options.maxEvents || DEFAULT_MAX_EVENTS);
   queue.enqueue({ type: "frame-arrival", frame: cloneEthernetFrame(frame, { currentDeviceId: deviceId, currentInterfaceId: interfaceId }), deviceId, interfaceId });
   return processEventQueue(state, queue, options);
 }
@@ -120,7 +121,7 @@ export function processEventQueue(state, queue, options = {}) {
   while (queue.length) {
     const event = queue.dequeue();
     events.push(recordEvent(state, event));
-    if (events.length > (options.maxEvents || 256)) {
+    if (events.length > (options.maxEvents || DEFAULT_MAX_EVENTS)) {
       const frame = event.frame;
       frame.dropReason = L2_DROP_REASONS.loopSafetyLimit;
       drops.push({ frame, reason: frame.dropReason });
@@ -178,8 +179,8 @@ function switchFrame(state, queue, device, ingressInterfaceId, frame, drops) {
   if (!flood && isUnicastMac(destination)) {
     const entry = lookupMacEntry(device, destination, frame.vlanId);
     if (entry) {
-      if (entry.interfaceId === ingressInterfaceId || entry.port === ingressInterfaceId) return;
-      const egress = entry.interfaceId || entry.port;
+      const egress = macEntryInterface(entry);
+      if (egress === ingressInterfaceId) return;
       const intf = device.config.interfaces?.[egress];
       if (!eligibleEgressInterface(device, intf, frame.vlanId) || !egressHasUsableConnection(state, device, egress)) {
         removeDynamicMacEntry(device, destination, frame.vlanId);
@@ -243,7 +244,7 @@ export function clearDynamicMacEntries(device, filter = {}) {
   ensureDeviceLayer2State(device);
   const vlan = filter.vlan ? normalizeVlanId(filter.vlan) : null;
   const before = device.config.macTable.length;
-  device.config.macTable = device.config.macTable.filter(e => isStaticMacEntry(e) || (vlan && e.vlan !== vlan) || (filter.interfaceId && e.interfaceId !== filter.interfaceId && e.port !== filter.interfaceId));
+  device.config.macTable = device.config.macTable.filter(e => isStaticMacEntry(e) || (vlan && e.vlan !== vlan) || (filter.interfaceId && macEntryInterface(e) !== filter.interfaceId));
   return before - device.config.macTable.length;
 }
 
@@ -251,7 +252,7 @@ export function removeMacEntry(device, mac, vlan, interfaceId = null) {
   const normalized = normalizeMacAddress(mac);
   const vlanId = normalizeVlanId(vlan);
   const before = device.config.macTable?.length || 0;
-  device.config.macTable = (device.config.macTable || []).filter(e => !(e.mac === normalized && e.vlan === vlanId && (!interfaceId || e.interfaceId === interfaceId || e.port === interfaceId)));
+  device.config.macTable = (device.config.macTable || []).filter(e => !(e.mac === normalized && e.vlan === vlanId && (!interfaceId || macEntryInterface(e) === interfaceId)));
   return before - device.config.macTable.length;
 }
 
@@ -274,6 +275,10 @@ function removeDynamicMacEntry(device, mac, vlan) {
 
 export function isStaticMacEntry(entry) {
   return entry?.static === true || String(entry?.type || "").toUpperCase() === "STATIC";
+}
+
+function macEntryInterface(entry) {
+  return entry?.interfaceId || entry?.port || "";
 }
 
 function ingressVlan(intf) {

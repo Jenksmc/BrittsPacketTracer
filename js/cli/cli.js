@@ -60,7 +60,8 @@ export class CLI {
     }
     const cleared = clearDynamicMacEntries(this.device, filter);
     this.changed();
-    return `${cleared} dynamic MAC address-table entr${cleared===1?"y":"ies"} cleared.`;
+    const suffix = cleared === 1 ? "y" : "ies";
+    return `${cleared} dynamic MAC address-table entr${suffix} cleared.`;
   }
   configureStaticMac(command, remove) {
     if (!this.switchingSupported()) return "% MAC address-table is not supported on this device";
