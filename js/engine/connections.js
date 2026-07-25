@@ -82,7 +82,7 @@ export function hydrateDeviceInterfaces(device, deviceDef = {}) {
   for (const intf of Object.values(device.config.interfaces)) {
     const meta = interfaceMetadata(intf.name, deviceDef);
     for (const [key, value] of Object.entries(meta)) {
-      if (intf[key] === undefined || intf[key] === null || intf[key] === "") intf[key] = value;
+      if (intf[key] === undefined || intf[key] === null) intf[key] = value;
     }
     intf.administrativeState = intf.shutdown ? "down" : "up";
     intf.vlanMode = intf.mode || intf.vlanMode || "access";
@@ -126,7 +126,11 @@ export function canConnectPorts(cableKey, aDevice, aPort, bDevice, bPort, option
   if (!CONNECTION_TYPE_MAP[cableKey] || cableKey === "automatic") return { ok: false, reason: "Choose a concrete cable type or use automatic selection." };
   if (!portSupportsCable(aPort, cableKey)) return { ok: false, reason: `${aPort.name} does not accept ${CONNECTION_TYPE_MAP[cableKey].label}.` };
   if (!portSupportsCable(bPort, cableKey)) return { ok: false, reason: `${bPort.name} does not accept ${CONNECTION_TYPE_MAP[cableKey].label}.` };
-  if ((cableKey === "console" || cableKey === "octal") && aPort.connectorType === bPort.connectorType) return { ok: false, reason: "Console-style cables require a console/AUX port and an RS-232 terminal port." };
+  if (cableKey === "console" || cableKey === "octal") {
+    const hasConsole = aPort.connectorType === "console" || bPort.connectorType === "console";
+    const hasTerminal = aPort.connectorType === "rs232" || bPort.connectorType === "rs232";
+    if (!hasConsole || !hasTerminal) return { ok: false, reason: "Console-style cables require a console/AUX port and an RS-232 terminal port." };
+  }
   if (["serialDce", "serialDte"].includes(cableKey) && aPort.interfaceType !== "serial") return { ok: false, reason: "The first selected port must be a serial interface for this serial cable role." };
   if (cableKey === "wirelessAssociation" && (aPort.interfaceType !== "wireless" || bPort.interfaceType !== "wireless")) return { ok: false, reason: "Wireless association requires wireless interfaces on both devices." };
   return { ok: true, reason: "Compatible" };
@@ -154,7 +158,8 @@ export function validateLink(state, link) {
   const bDevice = state.devices.find(d => d.id === link.b.deviceId);
   const aPort = aDevice?.config.interfaces?.[link.a.port];
   const bPort = bDevice?.config.interfaces?.[link.b.port];
-  const cableKey = cableForLink(link) === "automatic" ? (link.resolvedCableType || "copperStraightThrough") : cableForLink(link);
+  const linkCable = cableForLink(link);
+  const cableKey = linkCable === "automatic" ? (link.resolvedCableType || "copperStraightThrough") : linkCable;
   const validation = canConnectPorts(cableKey, aDevice, aPort, bDevice, bPort, { ignoreLinkId: link.id });
   if (!validation.ok) return validation;
   if (!aDevice.enabled || !aDevice.config.physical?.power) return { ok: false, reason: `${aDevice.name} is powered off.` };
@@ -201,11 +206,11 @@ export function attachDeviceDefinitions(devices, deviceTypes) {
 
 export function abbreviateInterfaceName(name) {
   return name
-    .replace(/^FastEthernet/i, "Fa")
     .replace(/^TenGigabitEthernet/i, "Te")
+    .replace(/^FastEthernet/i, "Fa")
     .replace(/^GigabitEthernet/i, "Gi")
-    .replace(/^Ethernet/i, "Et")
     .replace(/^Serial/i, "Se")
     .replace(/^Management/i, "Mgmt")
-    .replace(/^Wireless/i, "Wi");
+    .replace(/^Wireless/i, "Wi")
+    .replace(/^Ethernet/i, "Et");
 }
