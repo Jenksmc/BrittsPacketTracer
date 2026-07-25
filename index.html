@@ -1,95 +1,13 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="description" content="BrittsPacketTracer browser networking simulator" />
-  <title>BrittsPacketTracer</title>
-  <link rel="stylesheet" href="css/styles.css" />
-</head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BrittsPacketTracer</title><link rel="stylesheet" href="css/styles.css"></head>
 <body>
-  <header class="topbar">
-    <div>
-      <h1>BrittsPacketTracer</h1>
-      <span class="subtitle">Browser Network Simulator</span>
-    </div>
-    <nav class="toolbar" aria-label="Main tools">
-      <button id="selectTool" class="active">Select</button>
-      <button id="connectTool">Cable</button>
-      <button id="deleteTool">Delete</button>
-      <button id="saveBtn">Save</button>
-      <button id="loadBtn">Load</button>
-      <button id="exportBtn">Export</button>
-      <label class="file-button">Import<input id="importInput" type="file" accept=".json,application/json" /></label>
-      <button id="clearBtn" class="danger">Clear</button>
-    </nav>
-  </header>
-
-  <main class="app-shell">
-    <aside class="sidebar">
-      <section>
-        <h2>Devices</h2>
-        <div id="devicePalette" class="palette"></div>
-      </section>
-
-      <section class="instructions">
-        <h2>How to use</h2>
-        <p>Drag devices onto the canvas. Select Cable, then click two devices to connect them. Double-click a device to open its CLI.</p>
-      </section>
-
-      <section>
-        <h2>Simulation</h2>
-        <div class="simulation-controls">
-          <button id="pingTool">Quick Ping</button>
-          <button id="recomputeBtn">Recompute</button>
-        </div>
-        <div id="statusPanel" class="status-panel">Ready.</div>
-      </section>
-    </aside>
-
-    <section class="workspace-wrap">
-      <div id="workspace" class="workspace" tabindex="0" aria-label="Network topology workspace">
-        <svg id="linkLayer" class="link-layer"></svg>
-        <div id="emptyHint" class="empty-hint">
-          Drag a router, switch, or PC here to begin.
-        </div>
-      </div>
-    </section>
-
-    <aside class="inspector">
-      <h2>Inspector</h2>
-      <div id="inspectorContent">
-        <p>Select a device or cable.</p>
-      </div>
-    </aside>
-  </main>
-
-  <dialog id="cliDialog" class="cli-dialog">
-    <form method="dialog" class="dialog-header">
-      <div>
-        <strong id="cliTitle">Device CLI</strong>
-        <span id="cliModeLabel">User EXEC</span>
-      </div>
-      <button value="close" aria-label="Close CLI">✕</button>
-    </form>
-    <div id="cliOutput" class="cli-output" aria-live="polite"></div>
-    <div class="cli-input-row">
-      <span id="cliPrompt">Router&gt;</span>
-      <input id="cliInput" autocomplete="off" spellcheck="false" aria-label="CLI command" />
-    </div>
-  </dialog>
-
-  <dialog id="pingDialog" class="small-dialog">
-    <form method="dialog" class="dialog-header">
-      <strong>Quick Ping</strong>
-      <button value="close">✕</button>
-    </form>
-    <label>Source device<select id="pingSource"></select></label>
-    <label>Destination IP<input id="pingDestination" placeholder="192.168.1.2" /></label>
-    <button id="runPingBtn" type="button">Run Ping</button>
-    <pre id="pingResult"></pre>
-  </dialog>
-
-  <script type="module" src="js/ui/app.js"></script>
-</body>
-</html>
+<header class="menu-bar"><div class="brand"><span class="brand-mark">B</span><div><strong>BrittsPacketTracer</strong><small>Network Simulation Workspace</small></div></div><nav><button id="newBtn">New</button><button id="saveBtn">Save</button><button id="loadBtn">Load</button><button id="exportBtn">Export</button><label class="button-file">Import<input id="importInput" type="file" accept=".json"></label></nav></header>
+<div class="tool-strip"><button id="selectTool" class="active" title="Select and move">↖ Select</button><button id="connectTool" title="Connect devices">⌁ Connections</button><button id="deleteTool" title="Delete">⌫ Delete</button><span class="separator"></span><button id="pingTool">✉ Add Simple PDU</button><button id="recomputeBtn">↻ Recalculate</button><span id="statusPanel">Ready</span></div>
+<main class="app-shell">
+  <aside class="device-panel"><div class="panel-title">Network Components</div><div id="categoryTabs" class="category-tabs"></div><div id="devicePalette" class="palette"></div></aside>
+  <section class="workspace-wrap"><div id="workspace" class="workspace"><svg id="linkLayer" class="link-layer"></svg><div id="emptyHint" class="empty-hint"><strong>Logical Workspace</strong><span>Drag a device here to start building.</span></div></div><div class="workspace-tabs"><button class="active">Logical</button><button disabled>Physical</button><span>Realtime</span></div></section>
+  <aside class="inspector"><div class="panel-title">Selection</div><div id="inspectorContent"><p>Select a device or connection.</p></div></aside>
+</main>
+<div id="windowLayer" class="window-layer"></div>
+<template id="deviceWindowTemplate"><section class="device-window"><header class="window-header"><div><strong class="window-title"></strong><small class="window-model"></small></div><div class="window-actions"><button data-action="pin" title="Keep on top">◇</button><button data-action="close" title="Close">×</button></div></header><nav class="window-tabs"></nav><div class="window-content"></div><footer class="window-footer"><span>BrittsPacketTracer Device Manager</span></footer></section></template>
+<dialog id="pingDialog" class="small-dialog"><form method="dialog" class="dialog-header"><strong>Add Simple PDU</strong><button value="close">×</button></form><label>Source<select id="pingSource"></select></label><label>Destination IP<input id="pingDestination" placeholder="192.168.1.2"></label><button id="runPingBtn" type="button">Send</button><pre id="pingResult"></pre></dialog>
+<script type="module" src="js/ui/app.js"></script></body></html>

@@ -26,14 +26,16 @@ export class CLI {
     if (!command) return "";
     this.history.push(command); this.historyIndex = this.history.length;
     const c = command.toLowerCase();
+    const compact = c.replace(/\s+/g," ");
     if (c === "?" || c === "help") return this.help();
     if (c === "exit") return this.exit();
     if (c === "end") { this.mode="privileged"; this.currentInterface=null; return ""; }
-    if (c === "enable" && this.mode==="user") { this.mode="privileged"; return ""; }
+    if ((c === "enable" || c === "en") && this.mode==="user") { this.mode="privileged"; return ""; }
     if ((c==="disable") && this.mode==="privileged") { this.mode="user"; return ""; }
-    if ((c==="configure terminal" || c==="conf t") && this.mode==="privileged") { this.mode="config"; return ""; }
+    if ((c==="configure terminal" || c==="conf t" || c==="config t") && this.mode==="privileged") { this.mode="config"; return ""; }
 
     if (c.startsWith("show ")) return this.show(command.slice(5));
+    if (c.startsWith("sh ")) return this.show(command.slice(3));
     if (c.startsWith("ping ")) {
       const ip=command.split(/\s+/)[1];
       return simulatePing(this.state,this.device.id,ip).output;
@@ -74,7 +76,7 @@ export class CLI {
   }
   show(arg) {
     const a=arg.toLowerCase();
-    if (a==="ip interface brief" || a==="ip int brief") {
+    if (["ip interface brief","ip int brief","ip int br","ip interface br"].includes(a)) {
       const rows=["Interface              IP-Address      OK? Method Status                Protocol"];
       for (const i of Object.values(this.device.config.interfaces)) {
         const status=i.shutdown?"administratively down":"up";
@@ -82,12 +84,12 @@ export class CLI {
       }
       return rows.join("\n");
     }
-    if (a==="interfaces") {
+    if (a==="interfaces" || a==="int" || a==="interface") {
       return Object.values(this.device.config.interfaces).map(i =>
         `${i.name} is ${i.shutdown?"administratively down":"up"}, line protocol is ${i.shutdown?"down":"up"}\n  Internet address is ${i.ip ? `${i.ip} ${i.mask}` : "unassigned"}\n  Description: ${i.description||"none"}`
       ).join("\n\n");
     }
-    if (a==="vlan brief") {
+    if (a==="vlan brief" || a==="vlan br") {
       const lines=["VLAN Name                             Status    Ports"];
       for (const v of Object.values(this.device.config.vlans)) {
         const ports=Object.values(this.device.config.interfaces).filter(i=>i.vlan===v.id && i.mode==="access").map(i=>i.name).join(", ");
@@ -95,17 +97,28 @@ export class CLI {
       }
       return lines.join("\n");
     }
-    if (a==="ip route") {
+    if (a==="ip route" || a==="ip ro") {
       const lines=["Codes: C - connected, S - static, O - OSPF","Gateway of last resort is not set"];
       for (const i of Object.values(this.device.config.interfaces)) if (i.ip && !i.shutdown) lines.push(`C    ${i.ip}/${i.mask} is directly connected, ${i.name}`);
       for (const r of this.device.config.routes) lines.push(`S    ${r.network} ${r.mask} [1/0] via ${r.nextHop}`);
       return lines.join("\n");
     }
-    if (a==="cdp neighbors" || a==="lldp neighbors") {
+    if (["cdp neighbors","cdp nei","lldp neighbors","lldp nei"].includes(a)) {
       const lines=["Device ID        Local Intrfce     Holdtme    Capability  Platform  Port ID"];
       for (const n of neighbors(this.state,this.device.id)) lines.push(`${n.device.config.hostname.padEnd(16)} ${n.local.port.padEnd(17)} 120        R S I       Sim      ${n.remote.port}`);
       return lines.join("\n");
     }
+    if (["arp","ip arp"].includes(a)) {
+      const lines=["Protocol  Address          Age (min)  Hardware Addr   Type   Interface"];
+      for(const e of this.device.config.arpTable||[]) lines.push(`Internet  ${String(e.ip).padEnd(16)} 0          ${e.mac}  ARPA`);
+      return lines.join("\n");
+    }
+    if (["mac address-table","mac address-table dynamic","mac add"].includes(a)) {
+      const lines=["Vlan    Mac Address       Type        Ports"];
+      for(const e of this.device.config.macTable||[]) lines.push(`${String(e.vlan).padEnd(7)} ${e.mac.padEnd(17)} ${String(e.type).padEnd(11)} ${e.port}`);
+      return lines.join("\n");
+    }
+    if (["spanning-tree","span"].includes(a)) return `Spanning tree enabled protocol ${this.device.config.stp?.mode||"pvst"}\nRoot priority ${this.device.config.stp?.priority||32768}`;
     if (a==="running-config" || a==="run" || a==="startup-config") return this.runningConfig();
     return `% Unrecognized show command`;
   }
@@ -136,9 +149,14 @@ export class CLI {
       const name=command.split(/\s+/).slice(1).join("");
       this.device.config.hostname=name; this.device.name=name; this.changed(); return "";
     }
-    if (c.startsWith("interface ") || c.startsWith("int ")) {
-      const name=command.replace(/^int(?:erface)?\s+/i,"");
-      const key=Object.keys(this.device.config.interfaces).find(k=>k.toLowerCase()===name.toLowerCase() || k.toLowerCase().startsWith(name.toLowerCase()));
+    if (c.startsWith("interface ") || c.startsWith("int ") || c.startsWith("intf ")) {
+      const name=command.replace(/^(?:interface|int|intf)\s+/i,"");
+      const normalize = value => value.toLowerCase().replace(/\s+/g,"")
+        .replace(/^gigabitethernet/,"gi").replace(/^fastethernet/,"fa")
+        .replace(/^ethernet/,"e").replace(/^serial/,"s")
+        .replace(/^management/,"mgmt");
+      const wanted=normalize(name);
+      const key=Object.keys(this.device.config.interfaces).find(k=>normalize(k)===wanted || normalize(k).startsWith(wanted));
       if (!key) return "% Invalid interface type and number";
       this.currentInterface=key; this.mode="interface"; return "";
     }

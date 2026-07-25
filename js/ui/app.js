@@ -1,186 +1,43 @@
-import { DEVICE_TYPES, defaultDevice, computeLinkStates, simulatePing } from "../engine/network.js";
+import { DEVICE_TYPES, DEVICE_CATEGORIES, defaultDevice, computeLinkStates, simulatePing } from "../engine/network.js";
+import { deviceIcon } from "../devices/icons.js";
 import { CLI } from "../cli/cli.js";
-
-const $ = s => document.querySelector(s);
-const state = { version:1, devices:[], links:[], counters:{}, selected:null, tool:"select", connectSource:null };
-const workspace=$("#workspace"), linkLayer=$("#linkLayer"), palette=$("#devicePalette"), inspector=$("#inspectorContent");
-let activeCli=null, drag=null;
-
-for (const [type,def] of Object.entries(DEVICE_TYPES)) {
-  const el=document.createElement("div");
-  el.className="palette-item"; el.draggable=true; el.dataset.type=type;
-  el.innerHTML=`<div class="palette-icon">${def.icon}</div><div class="palette-label">${def.label}</div>`;
-  el.addEventListener("dragstart",e=>e.dataTransfer.setData("device-type",type));
-  palette.appendChild(el);
-}
-workspace.addEventListener("dragover",e=>e.preventDefault());
-workspace.addEventListener("drop",e=>{
-  e.preventDefault();
-  const type=e.dataTransfer.getData("device-type"); if(!DEVICE_TYPES[type]) return;
-  const rect=workspace.getBoundingClientRect();
-  addDevice(type,e.clientX-rect.left+workspace.parentElement.scrollLeft,e.clientY-rect.top+workspace.parentElement.scrollTop);
-});
-
-function uid(prefix){ return `${prefix}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`; }
-function addDevice(type,x,y){
-  state.counters[type]=(state.counters[type]||0)+1;
-  state.devices.push(defaultDevice(type,uid("dev"),Math.max(0,x-52),Math.max(0,y-40),state.counters[type]));
-  render(); persist();
-}
-function render(){
-  computeLinkStates(state);
-  [...workspace.querySelectorAll(".device")].forEach(e=>e.remove());
-  linkLayer.innerHTML="";
-  $("#emptyHint").style.display=state.devices.length?"none":"block";
-  for(const link of state.links) drawLink(link);
-  for(const device of state.devices) drawDevice(device);
-  renderInspector();
-}
-function drawDevice(device){
-  const def=DEVICE_TYPES[device.type], el=document.createElement("div");
-  el.className="device"+(state.selected?.kind==="device"&&state.selected.id===device.id?" selected":"")+(state.connectSource===device.id?" connect-source":"");
-  el.style.left=device.x+"px"; el.style.top=device.y+"px"; el.dataset.id=device.id;
-  el.innerHTML=`<span class="device-led"></span><div class="device-icon">${def.icon}</div><div class="device-name">${escapeHtml(device.name)}</div><div class="device-meta">${def.label}</div>`;
-  el.addEventListener("pointerdown",e=>startDrag(e,device,el));
-  el.addEventListener("click",e=>{e.stopPropagation(); handleDeviceClick(device);});
-  el.addEventListener("dblclick",e=>{e.stopPropagation(); openCli(device);});
-  workspace.appendChild(el);
-}
-function drawLink(link){
-  const a=state.devices.find(d=>d.id===link.a.deviceId), b=state.devices.find(d=>d.id===link.b.deviceId);
-  if(!a||!b) return;
-  const line=document.createElementNS("http://www.w3.org/2000/svg","line");
-  line.setAttribute("x1",a.x+52); line.setAttribute("y1",a.y+39); line.setAttribute("x2",b.x+52); line.setAttribute("y2",b.y+39);
-  line.setAttribute("class",`link-line ${link.up?"up":"down"}`);
-  line.style.pointerEvents="stroke";
-  line.addEventListener("click",e=>{e.stopPropagation(); state.selected={kind:"link",id:link.id}; renderInspector();});
-  linkLayer.appendChild(line);
-}
-function startDrag(e,device,el){
-  if(state.tool!=="select") return;
-  const rect=el.getBoundingClientRect();
-  drag={device,dx:e.clientX-rect.left,dy:e.clientY-rect.top};
-  el.setPointerCapture(e.pointerId);
-  el.addEventListener("pointermove",moveDrag);
-  el.addEventListener("pointerup",endDrag,{once:true});
-}
-function moveDrag(e){
-  if(!drag) return;
-  const rect=workspace.getBoundingClientRect();
-  drag.device.x=Math.max(0,e.clientX-rect.left+workspace.parentElement.scrollLeft-drag.dx);
-  drag.device.y=Math.max(0,e.clientY-rect.top+workspace.parentElement.scrollTop-drag.dy);
-  render();
-}
-function endDrag(e){
-  e.currentTarget.removeEventListener("pointermove",moveDrag);
-  drag=null; persist();
-}
-function handleDeviceClick(device){
-  if(state.tool==="delete"){ removeDevice(device.id); return; }
-  if(state.tool==="connect"){
-    if(!state.connectSource){ state.connectSource=device.id; status(`Selected ${device.name}. Choose a second device.`); render(); return; }
-    if(state.connectSource===device.id){state.connectSource=null;render();return;}
-    connectDevices(state.connectSource,device.id); state.connectSource=null; render(); persist(); return;
-  }
-  state.selected={kind:"device",id:device.id}; render();
-}
-function availablePort(device){
-  return Object.values(device.config.interfaces).find(i=>!i.connectedLinkId);
-}
-function connectDevices(aId,bId){
-  const a=state.devices.find(d=>d.id===aId), b=state.devices.find(d=>d.id===bId);
-  const ap=availablePort(a), bp=availablePort(b);
-  if(!ap||!bp){status("No available ports on one of the selected devices.");return;}
-  const id=uid("link"), link={id,type:"copper-straight-through",a:{deviceId:a.id,port:ap.name},b:{deviceId:b.id,port:bp.name},up:false};
-  ap.connectedLinkId=id; bp.connectedLinkId=id; state.links.push(link);
-  status(`Connected ${a.name} ${ap.name} to ${b.name} ${bp.name}.`);
-}
-function removeDevice(id){
-  const linkIds=state.links.filter(l=>l.a.deviceId===id||l.b.deviceId===id).map(l=>l.id);
-  for(const lid of linkIds) removeLink(lid);
-  state.devices=state.devices.filter(d=>d.id!==id); state.selected=null; render(); persist();
-}
-function removeLink(id){
-  for(const d of state.devices) for(const i of Object.values(d.config.interfaces)) if(i.connectedLinkId===id)i.connectedLinkId=null;
-  state.links=state.links.filter(l=>l.id!==id); state.selected=null; render(); persist();
-}
-workspace.addEventListener("click",()=>{state.selected=null;render();});
-
-function renderInspector(){
-  if(!state.selected){inspector.innerHTML="<p>Select a device or cable.</p>";return;}
-  if(state.selected.kind==="link"){
-    const l=state.links.find(x=>x.id===state.selected.id); if(!l) return;
-    const a=state.devices.find(d=>d.id===l.a.deviceId), b=state.devices.find(d=>d.id===l.b.deviceId);
-    inspector.innerHTML=`<p><span class="badge">${l.up?"Up":"Down"}</span></p><p>${a.name}<br>${l.a.port}</p><p>↕</p><p>${b.name}<br>${l.b.port}</p><button id="deleteSelectedLink" class="danger">Delete cable</button>`;
-    $("#deleteSelectedLink").onclick=()=>removeLink(l.id); return;
-  }
-  const d=state.devices.find(x=>x.id===state.selected.id); if(!d)return;
-  const rows=Object.values(d.config.interfaces).map(i=>`<tr><td>${i.name}</td><td>${i.ip||"unassigned"}</td><td>${i.shutdown?"down":"up"}</td></tr>`).join("");
-  inspector.innerHTML=`<label>Name<input id="deviceName" value="${escapeHtml(d.name)}"></label>
-  <label>Power<select id="devicePower"><option value="on"${d.enabled?" selected":""}>On</option><option value="off"${!d.enabled?" selected":""}>Off</option></select></label>
-  <button id="openCliBtn">Open CLI</button>
-  <h2 style="margin-top:1rem">Interfaces</h2><table class="interface-table"><tr><th>Port</th><th>IP</th><th>State</th></tr>${rows}</table>`;
-  $("#deviceName").onchange=e=>{d.name=e.target.value;d.config.hostname=e.target.value;render();persist();};
-  $("#devicePower").onchange=e=>{d.enabled=e.target.value==="on";render();persist();};
-  $("#openCliBtn").onclick=()=>openCli(d);
-}
-function openCli(device){
-  activeCli=new CLI(state,device,()=>{render();persist();updateCliPrompt();});
-  $("#cliTitle").textContent=`${device.name} CLI`;
-  $("#cliOutput").textContent=`BrittsPacketTracer IOS Simulation\nType ? for help.\n\n`;
-  updateCliPrompt(); $("#cliDialog").showModal(); $("#cliInput").focus();
-}
-function updateCliPrompt(){
-  if(!activeCli)return;
-  $("#cliPrompt").textContent=activeCli.prompt();
-  $("#cliModeLabel").textContent=activeCli.mode;
-}
-$("#cliInput").addEventListener("keydown",e=>{
-  if(!activeCli)return;
-  if(e.key==="Enter"){
-    const cmd=e.target.value, output=activeCli.execute(cmd);
-    $("#cliOutput").textContent+=`${activeCli.prompt()}${cmd}\n${output?output+"\n":""}`;
-    e.target.value=""; updateCliPrompt(); $("#cliOutput").scrollTop=$("#cliOutput").scrollHeight;
-  } else if(e.key==="ArrowUp"){
-    e.preventDefault(); activeCli.historyIndex=Math.max(0,activeCli.historyIndex-1); e.target.value=activeCli.history[activeCli.historyIndex]||"";
-  } else if(e.key==="ArrowDown"){
-    e.preventDefault(); activeCli.historyIndex=Math.min(activeCli.history.length,activeCli.historyIndex+1); e.target.value=activeCli.history[activeCli.historyIndex]||"";
-  }
-});
-
-function setTool(tool){
-  state.tool=tool; state.connectSource=null;
-  ["select","connect","delete"].forEach(t=>$(`#${t}Tool`)?.classList.toggle("active",t===tool));
-  status(`Tool: ${tool}`);
-  render();
-}
-$("#selectTool").onclick=()=>setTool("select");
-$("#connectTool").onclick=()=>setTool("connect");
-$("#deleteTool").onclick=()=>setTool("delete");
-$("#recomputeBtn").onclick=()=>{render();status("Link and reachability state recomputed.");};
-$("#clearBtn").onclick=()=>{if(confirm("Delete the entire topology?")){state.devices=[];state.links=[];state.counters={};render();persist();}};
-$("#saveBtn").onclick=()=>{persist();status("Saved to this browser.");};
-$("#loadBtn").onclick=()=>{restore();render();status("Loaded saved topology.");};
-$("#exportBtn").onclick=()=>{
-  const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
-  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="britts-packet-tracer-lab.json";a.click();URL.revokeObjectURL(a.href);
-};
-$("#importInput").onchange=async e=>{
-  const file=e.target.files[0]; if(!file)return;
-  try{const imported=JSON.parse(await file.text());Object.assign(state,imported);render();persist();status("Imported topology.");}
-  catch{alert("That file is not a valid BrittsPacketTracer lab.");}
-};
-$("#pingTool").onclick=()=>{
-  const sel=$("#pingSource");sel.innerHTML=state.devices.map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join("");
-  $("#pingResult").textContent="";$("#pingDialog").showModal();
-};
-$("#runPingBtn").onclick=()=>{$("#pingResult").textContent=simulatePing(state,$("#pingSource").value,$("#pingDestination").value.trim()).output;};
-
-function persist(){ localStorage.setItem("brittsPacketTracerState",JSON.stringify(state)); }
-function restore(){
-  const raw=localStorage.getItem("brittsPacketTracerState"); if(!raw)return;
-  try{const saved=JSON.parse(raw);Object.assign(state,saved);}catch{}
-}
-function status(msg){$("#statusPanel").textContent=msg;}
-function escapeHtml(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));}
-restore(); render();
+const $=s=>document.querySelector(s); const state={version:2,devices:[],links:[],counters:{},selected:null,tool:"select",connectSource:null};
+const workspace=$("#workspace"),links=$("#linkLayer"),palette=$("#devicePalette"),inspector=$("#inspectorContent"),windowLayer=$("#windowLayer"); let category="routers",drag=null,z=100,activeWindows=new Map();
+const categoryIcons={routers:"R",switches:"S",hubs:"H",wireless:"Wi",security:"FW",wan:"WAN",endDevices:"PC",industrial:"IoT"};
+for(const [key,label] of Object.entries(DEVICE_CATEGORIES)){if(key==="connections")continue;const b=document.createElement("button");b.textContent=categoryIcons[key]||label.slice(0,2);b.title=label;b.onclick=()=>{category=key;renderPalette()};$("#categoryTabs").appendChild(b)}
+function renderPalette(){[...$("#categoryTabs").children].forEach((b,i)=>b.classList.toggle("active",Object.keys(DEVICE_CATEGORIES).filter(k=>k!=="connections")[i]===category));palette.innerHTML="";for(const [type,def] of Object.entries(DEVICE_TYPES)){if(def.category!==category)continue;const el=document.createElement("div");el.className="palette-item";el.draggable=true;el.innerHTML=`${deviceIcon(def.icon)}<div class="palette-label">${def.label}</div>`;el.addEventListener("dragstart",e=>e.dataTransfer.setData("device-type",type));palette.appendChild(el)}}
+workspace.addEventListener("dragover",e=>e.preventDefault());workspace.addEventListener("drop",e=>{e.preventDefault();const type=e.dataTransfer.getData("device-type");if(!DEVICE_TYPES[type])return;const r=workspace.getBoundingClientRect();addDevice(type,e.clientX-r.left+workspace.parentElement.scrollLeft,e.clientY-r.top+workspace.parentElement.scrollTop)});
+function uid(p){return `${p}-${crypto.randomUUID?.()||Math.random().toString(36).slice(2)}`}
+function addDevice(type,x,y){state.counters[type]=(state.counters[type]||0)+1;state.devices.push(defaultDevice(type,uid("dev"),Math.max(0,x-56),Math.max(0,y-39),state.counters[type]));render();persist()}
+function render(){computeLinkStates(state);workspace.querySelectorAll(".device").forEach(e=>e.remove());links.innerHTML="";$("#emptyHint").style.display=state.devices.length?"none":"block";state.links.forEach(drawLink);state.devices.forEach(drawDevice);renderInspector()}
+function drawDevice(d){const def=DEVICE_TYPES[d.type],el=document.createElement("div");el.className="device"+(state.selected?.id===d.id?" selected":"")+(state.connectSource===d.id?" connect-source":"");el.style.left=d.x+"px";el.style.top=d.y+"px";el.innerHTML=`<div class="device-leds"><i></i><i></i></div>${deviceIcon(def.icon)}<div class="device-name">${esc(d.name)}</div><div class="device-model">${def.label}</div>`;el.addEventListener("pointerdown",e=>beginDeviceDrag(e,d,el));el.addEventListener("click",e=>{e.stopPropagation();deviceClick(d)});el.addEventListener("dblclick",e=>{e.stopPropagation();openDeviceWindow(d)});workspace.appendChild(el)}
+function beginDeviceDrag(e,d,el){if(state.tool!=="select"||e.button!==0)return;e.preventDefault();const wr=workspace.getBoundingClientRect();drag={d,el,offsetX:e.clientX-wr.left+workspace.parentElement.scrollLeft-d.x,offsetY:e.clientY-wr.top+workspace.parentElement.scrollTop-d.y,moved:false};document.addEventListener("pointermove",moveDevice);document.addEventListener("pointerup",endDevice,{once:true})}
+function moveDevice(e){if(!drag)return;const wr=workspace.getBoundingClientRect();const nx=Math.max(0,e.clientX-wr.left+workspace.parentElement.scrollLeft-drag.offsetX),ny=Math.max(0,e.clientY-wr.top+workspace.parentElement.scrollTop-drag.offsetY);if(Math.abs(nx-drag.d.x)>2||Math.abs(ny-drag.d.y)>2)drag.moved=true;drag.d.x=nx;drag.d.y=ny;drag.el.style.left=nx+"px";drag.el.style.top=ny+"px";updateConnectedLines(drag.d.id)}
+function endDevice(){document.removeEventListener("pointermove",moveDevice);if(drag?.moved){persist();render()}drag=null}
+function updateConnectedLines(){state.links.forEach((l,i)=>{const line=links.children[i];if(!line)return;const a=state.devices.find(d=>d.id===l.a.deviceId),b=state.devices.find(d=>d.id===l.b.deviceId);line.setAttribute("x1",a.x+56);line.setAttribute("y1",a.y+36);line.setAttribute("x2",b.x+56);line.setAttribute("y2",b.y+36)})}
+function drawLink(l){const a=state.devices.find(d=>d.id===l.a.deviceId),b=state.devices.find(d=>d.id===l.b.deviceId);if(!a||!b)return;const line=document.createElementNS("http://www.w3.org/2000/svg","line");line.setAttribute("x1",a.x+56);line.setAttribute("y1",a.y+36);line.setAttribute("x2",b.x+56);line.setAttribute("y2",b.y+36);line.setAttribute("class",`link-line ${l.up?"up":"down"}`);line.addEventListener("click",e=>{e.stopPropagation();state.selected={kind:"link",id:l.id};renderInspector()});links.appendChild(line)}
+function deviceClick(d){if(drag?.moved)return;if(state.tool==="delete")return removeDevice(d.id);if(state.tool==="connect"){if(!state.connectSource){state.connectSource=d.id;status(`Select the device to connect to ${d.name}.`);return render()}if(state.connectSource===d.id){state.connectSource=null;return render()}connect(state.connectSource,d.id);state.connectSource=null;render();persist();return}state.selected={kind:"device",id:d.id};render()}
+function freePort(d){return Object.values(d.config.interfaces).find(i=>!i.connectedLinkId&&i.name!=="Wireless0")}
+function connect(aid,bid){const a=state.devices.find(d=>d.id===aid),b=state.devices.find(d=>d.id===bid),ap=freePort(a),bp=freePort(b);if(!ap||!bp)return status("No compatible free wired ports are available.");const id=uid("link");state.links.push({id,type:"automatic",a:{deviceId:aid,port:ap.name},b:{deviceId:bid,port:bp.name},up:false});ap.connectedLinkId=id;bp.connectedLinkId=id;status(`Connected ${a.name} ${ap.name} to ${b.name} ${bp.name}.`)}
+function removeDevice(id){state.links.filter(l=>l.a.deviceId===id||l.b.deviceId===id).forEach(l=>removeLink(l.id,false));state.devices=state.devices.filter(d=>d.id!==id);state.selected=null;activeWindows.get(id)?.remove();activeWindows.delete(id);render();persist()}
+function removeLink(id,r=true){for(const d of state.devices)for(const i of Object.values(d.config.interfaces))if(i.connectedLinkId===id)i.connectedLinkId=null;state.links=state.links.filter(l=>l.id!==id);state.selected=null;if(r){render();persist()}}
+workspace.addEventListener("click",()=>{state.selected=null;render()});
+function renderInspector(){if(!state.selected){inspector.innerHTML="<p>Select a device or connection.</p>";return}if(state.selected.kind==="link"){const l=state.links.find(x=>x.id===state.selected.id),a=state.devices.find(d=>d.id===l.a.deviceId),b=state.devices.find(d=>d.id===l.b.deviceId);inspector.innerHTML=`<b>${l.up?"Operational":"Down"}</b><p>${a.name}<br>${l.a.port}</p><p>to</p><p>${b.name}<br>${l.b.port}</p><button id="delLink">Delete connection</button>`;$("#delLink").onclick=()=>removeLink(l.id);return}const d=state.devices.find(x=>x.id===state.selected.id);const rows=Object.values(d.config.interfaces).slice(0,12).map(i=>`<tr><td>${i.name}</td><td>${i.ip||"-"}</td><td>${i.shutdown?"down":"up"}</td></tr>`).join("");inspector.innerHTML=`<label>Display name<input id="devName" value="${esc(d.name)}"></label><label>Power<select id="power"><option value="on" ${d.enabled?"selected":""}>On</option><option value="off" ${!d.enabled?"selected":""}>Off</option></select></label><button id="openDevice">Open Device</button><h4>Interfaces</h4><table class="interface-table"><tr><th>Port</th><th>IP</th><th>State</th></tr>${rows}</table>`;$("#devName").onchange=e=>{d.name=e.target.value;d.config.hostname=e.target.value;render();persist()};$("#power").onchange=e=>{d.enabled=e.target.value==="on";d.config.physical.power=d.enabled;render();persist()};$("#openDevice").onclick=()=>openDeviceWindow(d)}
+function openDeviceWindow(d){let win=activeWindows.get(d.id);if(win){win.style.zIndex=++z;return}const frag=$("#deviceWindowTemplate").content.cloneNode(true);win=frag.querySelector(".device-window");win.dataset.deviceId=d.id;win.style.left=`${Math.min(160+activeWindows.size*28,window.innerWidth-560)}px`;win.style.top=`${Math.min(90+activeWindows.size*24,window.innerHeight-420)}px`;win.style.zIndex=++z;win.querySelector(".window-title").textContent=d.name;win.querySelector(".window-model").textContent=DEVICE_TYPES[d.type].label;const tabs=deviceTabs(d);const nav=win.querySelector(".window-tabs");tabs.forEach((t,i)=>{const b=document.createElement("button");b.textContent=t;b.onclick=()=>showTab(win,d,t);if(i===0)b.classList.add("active");nav.appendChild(b)});win.querySelector('[data-action="close"]').onclick=()=>{activeWindows.delete(d.id);win.remove()};win.querySelector('[data-action="pin"]').onclick=e=>{win.classList.toggle("pinned");e.currentTarget.textContent=win.classList.contains("pinned")?"◆":"◇"};makeWindowDraggable(win);windowLayer.appendChild(win);activeWindows.set(d.id,win);showTab(win,d,tabs[0])}
+function deviceTabs(d){const base=["Physical","Config"];if(d.capabilities.desktop)base.push("Desktop");if(d.capabilities.cli)base.push("CLI");if(DEVICE_TYPES[d.type].kind==="server")base.push("Services");if(["wireless-router","access-point"].includes(DEVICE_TYPES[d.type].kind))base.push("GUI");return base}
+function showTab(win,d,tab){[...win.querySelectorAll(".window-tabs button")].forEach(b=>b.classList.toggle("active",b.textContent===tab));const c=win.querySelector(".window-content");if(tab==="Physical")renderPhysical(c,d);if(tab==="Config")renderConfig(c,d);if(tab==="Desktop")renderDesktop(c,d);if(tab==="CLI")renderCli(c,d);if(tab==="Services")renderServices(c,d);if(tab==="GUI")renderWirelessGui(c,d)}
+function renderPhysical(c,d){c.innerHTML=`<div class="physical-view"><div class="chassis">${deviceIcon(DEVICE_TYPES[d.type].icon)}</div><div><h3>${d.model}</h3><label><input type="checkbox" id="physicalPower" ${d.config.physical.power?"checked":""}> Power</label><p>Module support is prepared for future hot-swappable hardware and cable compatibility.</p><h4>Installed interfaces</h4>${Object.keys(d.config.interfaces).join("<br>")}</div></div>`;c.querySelector("#physicalPower").onchange=e=>{d.config.physical.power=e.target.checked;d.enabled=e.target.checked;render();persist()}}
+function renderConfig(c,d){const interfaces=Object.keys(d.config.interfaces);c.innerHTML=`<div class="config-sections"><div class="config-nav"><button data-page="global">GLOBAL Settings</button>${interfaces.map(n=>`<button data-page="${esc(n)}">${n}</button>`).join("")}</div><div class="config-pane"></div></div>`;const pane=c.querySelector(".config-pane");const show=page=>{if(page==="global"){pane.innerHTML=`<h3>Global Settings</h3><div class="form-grid"><label>Display Name</label><input id="cfgName" value="${esc(d.name)}"><label>Hostname</label><input id="cfgHost" value="${esc(d.config.hostname)}"><label>Default Gateway</label><input id="cfgGw" value="${esc(d.config.ipSettings.gateway)}"></div>`;pane.querySelector("#cfgName").onchange=e=>{d.name=e.target.value;winTitle(d);render();persist()};pane.querySelector("#cfgHost").onchange=e=>{d.config.hostname=e.target.value;persist()};pane.querySelector("#cfgGw").onchange=e=>{d.config.ipSettings.gateway=e.target.value;persist()}}else{const i=d.config.interfaces[page];pane.innerHTML=`<h3>${page}</h3><div class="form-grid"><label>Port Status</label><select id="ifState"><option value="up" ${!i.shutdown?"selected":""}>On</option><option value="down" ${i.shutdown?"selected":""}>Off</option></select><label>IPv4 Address</label><input id="ifIp" value="${esc(i.ip)}"><label>Subnet Mask</label><input id="ifMask" value="${esc(i.mask)}"><label>IPv6 Address</label><input id="ifV6" value="${esc(i.ipv6)}"><label>VLAN</label><input id="ifVlan" type="number" value="${i.vlan}"><label>Switchport Mode</label><select id="ifMode"><option ${i.mode==="access"?"selected":""}>access</option><option ${i.mode==="trunk"?"selected":""}>trunk</option></select><label>MAC Address</label><input disabled value="${i.mac}"></div>`;pane.querySelector("#ifState").onchange=e=>{i.shutdown=e.target.value==="down";render();persist()};pane.querySelector("#ifIp").onchange=e=>{i.ip=e.target.value;persist()};pane.querySelector("#ifMask").onchange=e=>{i.mask=e.target.value;persist()};pane.querySelector("#ifV6").onchange=e=>{i.ipv6=e.target.value;persist()};pane.querySelector("#ifVlan").onchange=e=>{i.vlan=Number(e.target.value)||1;persist()};pane.querySelector("#ifMode").onchange=e=>{i.mode=e.target.value;persist()}}};c.querySelectorAll(".config-nav button").forEach(b=>b.onclick=()=>show(b.dataset.page));show("global")}
+function winTitle(d){const w=activeWindows.get(d.id);if(w)w.querySelector(".window-title").textContent=d.name}
+function renderDesktop(c,d){const apps=[["IP Configuration","⌘"],["Terminal","▣"],["Command Prompt",">_"],["Web Browser","◎"],["PC Wireless","≋"],["VPN","◈"],["Traffic Generator","⇄"],["Text Editor","T"],["Firewall","▦"]];c.innerHTML=`<div class="desktop-grid">${apps.map(([n,i])=>`<button class="desktop-app" data-app="${n}"><b>${i}</b>${n}</button>`).join("")}</div>`;c.querySelectorAll(".desktop-app").forEach(b=>b.onclick=()=>openDesktopApp(c,d,b.dataset.app))}
+function openDesktopApp(c,d,app){if(app==="IP Configuration"){const s=d.config.ipSettings;c.innerHTML=`<button id="backDesktop">← Back</button><h3>IP Configuration</h3><label><input type="radio" name="mode" value="dhcp" ${s.dhcp?"checked":""}> DHCP</label> <label><input type="radio" name="mode" value="static" ${!s.dhcp?"checked":""}> Static</label><div class="form-grid"><label>IPv4 Address</label><input id="deskIp" value="${esc(s.ip)}"><label>Subnet Mask</label><input id="deskMask" value="${esc(s.mask)}"><label>Default Gateway</label><input id="deskGw" value="${esc(s.gateway)}"><label>DNS Server</label><input id="deskDns" value="${esc(s.dns)}"><label>IPv6 Address</label><input id="deskV6" value="${esc(s.ipv6)}"><label>IPv6 Gateway</label><input id="deskV6Gw" value="${esc(s.ipv6Gateway)}"></div>`;c.querySelector("#backDesktop").onclick=()=>renderDesktop(c,d);c.querySelectorAll('[name="mode"]').forEach(r=>r.onchange=e=>{s.dhcp=e.target.value==="dhcp";persist()});[["deskIp","ip"],["deskMask","mask"],["deskGw","gateway"],["deskDns","dns"],["deskV6","ipv6"],["deskV6Gw","ipv6Gateway"]].forEach(([id,k])=>c.querySelector("#"+id).onchange=e=>{s[k]=e.target.value;const first=Object.values(d.config.interfaces).find(i=>i.name!=="RS232"&&i.name!=="Wireless0");if(first&&k==="ip")first.ip=e.target.value;if(first&&k==="mask")first.mask=e.target.value;persist()})}else if(["Command Prompt","Terminal"].includes(app)){renderCli(c,d,true)}else{c.innerHTML=`<button id="backDesktop">← Back</button><h3>${app}</h3><p>This application shell is installed. Its protocol engine will be connected in the protocol milestones.</p>`;c.querySelector("#backDesktop").onclick=()=>renderDesktop(c,d)}}
+function renderCli(c,d,desktop=false){const cli=new CLI(state,d,()=>{render();persist()});c.innerHTML=`<div class="terminal"><div class="terminal-output">BrittsPacketTracer IOS-compatible simulation\n${desktop?"PC Command Prompt":""}\n\n</div><div class="terminal-row"><span class="prompt"></span><input autocomplete="off" spellcheck="false"></div></div>`;const out=c.querySelector(".terminal-output"),input=c.querySelector("input"),prompt=c.querySelector(".prompt");const update=()=>prompt.textContent=desktop?"C:\\>":cli.prompt();update();input.focus();input.onkeydown=e=>{if(e.key==="Enter"){const cmd=input.value,result=desktop&&!(cmd.toLowerCase().startsWith("ping")||cmd.toLowerCase().startsWith("tracert")||cmd.toLowerCase()==="ipconfig")?"'"+cmd+"' is not recognized as an internal or external command.":desktopCommand(cmd,d,cli);out.textContent+=`${desktop?"C:\\>":cli.prompt()}${cmd}\n${result?result+"\n":""}`;input.value="";update();out.scrollTop=out.scrollHeight}else if(e.key==="ArrowUp"){e.preventDefault();cli.historyIndex=Math.max(0,cli.historyIndex-1);input.value=cli.history[cli.historyIndex]||""}}}
+function desktopCommand(cmd,d,cli){const low=cmd.toLowerCase().trim();if(low==="ipconfig"||low==="ipconfig /all"){const s=d.config.ipSettings;return `IP Address.............: ${s.ip||"0.0.0.0"}\nSubnet Mask............: ${s.mask||"0.0.0.0"}\nDefault Gateway........: ${s.gateway||"0.0.0.0"}`};if(low.startsWith("tracert "))return cli.execute("traceroute "+cmd.split(/\s+/)[1]);return cli.execute(cmd)}
+function renderServices(c,d){c.innerHTML=`<h3>Server Services</h3>${Object.entries(d.config.services).map(([k,v])=>`<label style="display:block;margin:8px"><input type="checkbox" data-service="${k}" ${v?"checked":""}> ${k.toUpperCase()}</label>`).join("")}`;c.querySelectorAll("[data-service]").forEach(x=>x.onchange=e=>{d.config.services[e.target.dataset.service]=e.target.checked;persist()})}
+function renderWirelessGui(c,d){const w=d.config.wireless;c.innerHTML=`<h3>Wireless Setup</h3><div class="form-grid"><label>SSID</label><input id="ssid" value="${esc(w.ssid)}"><label>Security</label><select id="security"><option>none</option><option>wpa2-personal</option><option>wpa3-personal</option></select><label>Passphrase</label><input id="wifiPass" value="${esc(w.password)}"><label>Channel</label><input id="channel" value="${esc(w.channel)}"></div>`;c.querySelector("#security").value=w.security;[["ssid","ssid"],["security","security"],["wifiPass","password"],["channel","channel"]].forEach(([id,k])=>c.querySelector("#"+id).onchange=e=>{w[k]=e.target.value;persist()})}
+function makeWindowDraggable(win){const h=win.querySelector(".window-header");let wd=null;h.addEventListener("pointerdown",e=>{if(e.target.closest("button"))return;win.style.zIndex=++z;wd={x:e.clientX-win.offsetLeft,y:e.clientY-win.offsetTop};document.addEventListener("pointermove",mv);document.addEventListener("pointerup",up,{once:true})});function mv(e){if(!wd)return;win.style.left=Math.max(0,Math.min(window.innerWidth-win.offsetWidth,e.clientX-wd.x))+"px";win.style.top=Math.max(0,Math.min(window.innerHeight-win.offsetHeight,e.clientY-wd.y))+"px"}function up(){wd=null;document.removeEventListener("pointermove",mv)}}
+function setTool(t){state.tool=t;state.connectSource=null;["select","connect","delete"].forEach(x=>$(`#${x}Tool`).classList.toggle("active",x===t));status(`Tool: ${t}`);render()}
+$("#selectTool").onclick=()=>setTool("select");$("#connectTool").onclick=()=>setTool("connect");$("#deleteTool").onclick=()=>setTool("delete");$("#recomputeBtn").onclick=()=>{render();status("Topology recalculated.")};$("#newBtn").onclick=$("#clearBtn")?.onclick=()=>{};$("#newBtn").onclick=()=>{if(confirm("Clear the current topology?")){state.devices=[];state.links=[];state.counters={};render();persist()}};$("#saveBtn").onclick=()=>{persist();status("Saved in this browser.")};$("#loadBtn").onclick=()=>{restore();render();status("Saved topology loaded.")};$("#exportBtn").onclick=()=>{const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="britts-packet-tracer-lab.json";a.click();URL.revokeObjectURL(a.href)};$("#importInput").onchange=async e=>{try{Object.assign(state,JSON.parse(await e.target.files[0].text()));render();persist();status("Lab imported.")}catch{alert("Invalid lab file.")}};
+$("#pingTool").onclick=()=>{$("#pingSource").innerHTML=state.devices.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("");$("#pingResult").textContent="";$("#pingDialog").showModal()};$("#runPingBtn").onclick=()=>{$("#pingResult").textContent=simulatePing(state,$("#pingSource").value,$("#pingDestination").value.trim()).output;render();persist()};
+function persist(){localStorage.setItem("brittsPacketTracerV2",JSON.stringify(state))}function restore(){const raw=localStorage.getItem("brittsPacketTracerV2")||localStorage.getItem("brittsPacketTracer");if(raw){try{Object.assign(state,JSON.parse(raw))}catch{}}}function status(s){$("#statusPanel").textContent=s}function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
+restore();renderPalette();render();
