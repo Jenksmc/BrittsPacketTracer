@@ -42,5 +42,5 @@ $("#pingTool").onclick=()=>{$("#pingSource").innerHTML=state.devices.map(d=>`<op
 function persist(){localStorage.setItem("brittsPacketTracerV2",JSON.stringify(state))}
 function restore(){const raw=localStorage.getItem("brittsPacketTracerV2")||localStorage.getItem("brittsPacketTracer");if(raw){try{Object.assign(state,JSON.parse(raw))}catch{}}}
 function status(s){$("#statusPanel").textContent=s}
-function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
+function esc(s){return (s==null?"":String(s)).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
 restore();renderPalette();render();
