@@ -19,7 +19,7 @@ export class CLI {
     if (!this.switchingSupported()) return "% MAC address-table is not supported on this device";
     const tokens = arg.toLowerCase().trim().split(/\s+/);
     const entries = this.filteredMacEntries(tokens, arg);
-    const lines=["Vlan    Mac Address       Type        Ports      Age"];
+    const lines=[`${"Vlan".padEnd(7)} ${"Mac Address".padEnd(17)} ${"Type".padEnd(11)} ${"Ports".padEnd(10)} Age`];
     for(const e of entries) {
       const age = (String(e.type).toUpperCase()==="STATIC" || e.static) ? "-" : String(Math.max(0, Math.floor((Date.now() - (e.lastSeenAt || e.learnedAt || Date.now())) / 1000)));
       lines.push(`${String(e.vlan).padEnd(7)} ${formatMacForCisco(e.mac).padEnd(17)} ${String(e.type).toUpperCase().padEnd(11)} ${(e.interfaceId||e.port||"").padEnd(10)} ${age}`);

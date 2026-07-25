@@ -19,6 +19,7 @@ export const SWITCHING_DEVICE_KINDS = new Set(["switch", "multilayer-switch", "b
 export const HUB_DEVICE_KINDS = new Set(["hub", "repeater"]);
 export const ROUTED_DEVICE_KINDS = new Set(["router", "firewall"]);
 export const END_DEVICE_KINDS = new Set(["pc", "laptop", "server", "printer", "ip-phone", "tablet", "smartphone", "iot", "mcu", "plc", "sensor", "actuator", "wireless-router", "access-point", "modem", "cloud"]);
+const MAX_L2_EVENT_HISTORY = 200;
 
 export const L2_DROP_REASONS = {
   ingressDown: "ingress-interface-down",
@@ -355,7 +356,7 @@ function recordEvent(state, event) {
   };
   state.l2Events ||= [];
   state.l2Events.push(data);
-  if (state.l2Events.length > 200) state.l2Events.splice(0, state.l2Events.length - 200);
+  if (state.l2Events.length > MAX_L2_EVENT_HISTORY) state.l2Events.splice(0, state.l2Events.length - MAX_L2_EVENT_HISTORY);
   return data;
 }
 
@@ -364,14 +365,21 @@ function result(status, reason, frame) {
 }
 
 class L2EventQueue {
-  constructor(limit) { this.items = []; this.limit = limit; }
-  get length() { return this.items.length; }
+  constructor(limit) { this.items = []; this.head = 0; this.limit = limit; }
+  get length() { return this.items.length - this.head; }
   enqueue(event) {
-    if (this.items.length >= this.limit) return false;
+    if (this.length >= this.limit) return false;
     this.items.push(event);
     return true;
   }
-  dequeue() { return this.items.shift(); }
+  dequeue() {
+    const event = this.items[this.head++];
+    if (this.head > 32 && this.head * 2 > this.items.length) {
+      this.items = this.items.slice(this.head);
+      this.head = 0;
+    }
+    return event;
+  }
 }
 
 export { BROADCAST_MAC, DEFAULT_MAC_AGING_MS, formatMacForCisco, normalizeMacAddress };

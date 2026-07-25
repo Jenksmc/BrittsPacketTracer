@@ -211,9 +211,9 @@ function ethernetLike(intf) { return ["ethernet", "fiberEthernet", "wireless"].i
 function configuredValue(value) { const v = String(value || "auto").toLowerCase(); return v === "auto" ? null : value; }
 function supportedSpeeds(intf) { return intf.supportedSpeeds || (intf.speed && intf.speed !== "auto" ? [intf.speed] : ["10M", "100M"]); }
 function supportedDuplex(intf) { return intf.supportedDuplex || (intf.duplex && intf.duplex !== "auto" ? [intf.duplex] : ["half", "full"]); }
+const NEGOTIATION_ORDER = new Map(["10M", "11M", "54M", "100M", "150M", "1G", "10G", "half", "full"].map((value, index) => [value, index]));
 function highestCommon(a, b) {
-  const order = ["10M", "11M", "54M", "100M", "150M", "1G", "10G", "half", "full"];
-  return [...a].filter(x => b.includes(x)).sort((x, y) => order.indexOf(y) - order.indexOf(x))[0] || null;
+  return [...a].filter(x => b.includes(x)).sort((x, y) => (NEGOTIATION_ORDER.get(y) ?? -1) - (NEGOTIATION_ORDER.get(x) ?? -1))[0] || null;
 }
 
 function automaticCableForPair(aDevice, aPort, bDevice, bPort) {

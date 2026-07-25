@@ -124,10 +124,6 @@ export function normalizeVlanId(value) {
   return Number.isInteger(n) && n >= 1 && n <= 4094 ? n : 1;
 }
 
-export function macTableKey(mac, vlan) {
-  return `${normalizeVlanId(vlan)}|${normalizeMacAddress(mac) || ""}`;
-}
-
 export function formatMacForCisco(value) {
   const mac = normalizeMacAddress(value);
   if (!mac) return String(value || "");
