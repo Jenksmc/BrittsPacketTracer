@@ -193,7 +193,7 @@ function deviceKind(device) {
 export function attachDeviceDefinitions(devices, deviceTypes) {
   for (const device of devices) {
     const def = deviceTypes[device.type] || {};
-    device.typeDef = def;
+    if (!device.kind && def.kind) device.kind = def.kind;
     hydrateDeviceInterfaces(device, def);
   }
 }
