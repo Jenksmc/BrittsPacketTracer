@@ -219,12 +219,12 @@ export function abbreviateInterfaceName(name) {
     .replace(/^TenGigabitEthernet/i, "Te")
     .replace(/^FastEthernet/i, "Fa")
     .replace(/^GigabitEthernet/i, "Gi")
+    .replace(/^Ethernet/i, "Et")
     .replace(/^Serial/i, "Se")
-    .replace(/^Management/i, "Mgmt")
     .replace(/^Port-channel/i, "Po")
+    .replace(/^Management/i, "Mgmt")
     .replace(/^Vlan/i, "Vl")
-    .replace(/^Wireless/i, "Wi")
-    .replace(/^Ethernet/i, "Et");
+    .replace(/^Wireless/i, "Wi");
 }
 
 const INTERFACE_ALIASES = [
