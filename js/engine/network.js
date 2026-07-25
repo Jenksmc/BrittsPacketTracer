@@ -1,4 +1,4 @@
-import { attachDeviceDefinitions, hydrateDeviceInterfaces, physicalInterface, validateLink } from "./connections.js";
+import { attachDeviceDefinitions, hydrateDeviceInterfaces, NON_ROUTED_INTERFACE_TYPES, physicalInterface, validateLink } from "./connections.js";
 
 export const DEVICE_CATEGORIES = {
   routers: "Routers",
@@ -66,7 +66,7 @@ export function defaultDevice(type, id, x, y, count) {
       displayName: hostname,
       interfaces: Object.fromEntries(def.ports.map(p => {
         const intf = physicalInterface(p, def);
-        intf.shutdown = routed && !["console", "aux", "usb"].includes(intf.interfaceType);
+        intf.shutdown = routed && !NON_ROUTED_INTERFACE_TYPES.has(intf.interfaceType);
         intf.mac = randomMac();
         return [p, intf];
       })),

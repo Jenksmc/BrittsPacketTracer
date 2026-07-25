@@ -15,6 +15,7 @@ export const CONNECTION_TYPES = [
 ];
 
 export const CONNECTION_TYPE_MAP = Object.fromEntries(CONNECTION_TYPES.map(c => [c.key, c]));
+export const NON_ROUTED_INTERFACE_TYPES = new Set(["console", "usb"]);
 
 const NETWORK_DEVICE_KINDS = new Set(["router", "switch", "multilayer-switch", "hub", "bridge", "repeater", "firewall", "wireless-router", "access-point"]);
 const END_DEVICE_KINDS = new Set(["pc", "laptop", "server", "printer", "ip-phone", "tablet", "smartphone", "iot", "mcu", "plc", "sensor", "actuator"]);
@@ -64,7 +65,7 @@ export function physicalInterface(name, deviceDef = {}) {
     ip: "",
     mask: "",
     ipv6: "",
-    shutdown: ["router", "firewall", "multilayer-switch"].includes(deviceDef.kind) && !["console", "aux"].includes(meta.interfaceType),
+    shutdown: ["router", "firewall", "multilayer-switch"].includes(deviceDef.kind) && !NON_ROUTED_INTERFACE_TYPES.has(meta.interfaceType),
     vlan: 1,
     nativeVlan: 1,
     allowedVlans: "1-4094",
@@ -101,7 +102,7 @@ export function portSupportsCable(intf, cableKey) {
   if (cableKey === "automatic") return true;
   if (["copperStraightThrough", "copperCrossover"].includes(cableKey)) return type === "ethernet" && connector === "rj45";
   if (cableKey === "fiber") return type === "fiberEthernet" || connector === "sfp";
-  if (cableKey === "console" || cableKey === "octal") return type === "console" || connector === "rs232" || connector === "console";
+  if (cableKey === "console" || cableKey === "octal") return type === "console" || connector === "rs232";
   if (cableKey === "phone") return type === "phone" || connector === "rj11";
   if (cableKey === "coaxial") return type === "coaxial" || connector === "coax";
   if (cableKey === "serialDce" || cableKey === "serialDte") return type === "serial";
@@ -201,8 +202,8 @@ export function attachDeviceDefinitions(devices, deviceTypes) {
 export function abbreviateInterfaceName(name) {
   return name
     .replace(/^FastEthernet/i, "Fa")
-    .replace(/^GigabitEthernet/i, "Gi")
     .replace(/^TenGigabitEthernet/i, "Te")
+    .replace(/^GigabitEthernet/i, "Gi")
     .replace(/^Ethernet/i, "Et")
     .replace(/^Serial/i, "Se")
     .replace(/^Management/i, "Mgmt")

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { DEVICE_TYPES, defaultDevice } from "./network.js";
-import { attachDeviceDefinitions, canConnectPorts, selectAutomaticConnection } from "./connections.js";
+import { abbreviateInterfaceName, attachDeviceDefinitions, canConnectPorts, selectAutomaticConnection } from "./connections.js";
 
 function devices(...types) {
   const list = types.map((type, index) => defaultDevice(type, `d${index}`, 0, 0, index + 1));
@@ -43,5 +43,7 @@ function devices(...types) {
   assert.equal(choice.ok, true);
   assert.equal(choice.cableType, "wirelessAssociation");
 }
+
+assert.equal(abbreviateInterfaceName("TenGigabitEthernet1/1/1"), "Te1/1/1");
 
 console.log("connections.test.mjs passed");
