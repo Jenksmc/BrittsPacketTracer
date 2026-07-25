@@ -123,7 +123,7 @@ function link(state, a, aPort, b, bPort, id = `l${state.links.length + 1}`) {
   assert.equal(cli.execute("mac address-table static 0011.2233.4455 vlan 1 interface fa0/1"), "");
   cli.mode = "privileged";
   assert.match(cli.execute("show mac address-table static"), /0011\.2233\.4455/);
-  assert.match(cli.execute("show mac address-table interface fa0\/1"), /Fa|Fast|0011/);
+  assert.match(cli.execute("show mac address-table interface fa0/1"), /Fa|Fast|0011/);
   assert.match(cli.execute("clear mac address-table dynamic"), /0 dynamic/);
 }
 

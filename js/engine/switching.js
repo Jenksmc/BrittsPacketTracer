@@ -69,7 +69,7 @@ export function normalizeMacTable(device) {
       type: String(entry.type || (entry.static ? "STATIC" : "DYNAMIC")).toUpperCase(),
       learnedAt: entry.learnedAt || entry.learnTime || Date.now(),
       lastSeenAt: entry.lastSeenAt || entry.learnTime || Date.now(),
-      static: entry.static === true || String(entry.type).toUpperCase() === "STATIC",
+      static: isStaticMacEntry(entry),
       secure: entry.secure || false
     });
   }
@@ -243,7 +243,7 @@ export function clearDynamicMacEntries(device, filter = {}) {
   ensureDeviceLayer2State(device);
   const vlan = filter.vlan ? normalizeVlanId(filter.vlan) : null;
   const before = device.config.macTable.length;
-  device.config.macTable = device.config.macTable.filter(e => e.static || e.type === "STATIC" || (vlan && e.vlan !== vlan) || (filter.interfaceId && e.interfaceId !== filter.interfaceId && e.port !== filter.interfaceId));
+  device.config.macTable = device.config.macTable.filter(e => isStaticMacEntry(e) || (vlan && e.vlan !== vlan) || (filter.interfaceId && e.interfaceId !== filter.interfaceId && e.port !== filter.interfaceId));
   return before - device.config.macTable.length;
 }
 
@@ -264,12 +264,16 @@ export function lookupMacEntry(device, mac, vlan) {
 export function ageMacTable(device, now = Date.now()) {
   ensureDeviceLayer2State(device);
   const timeout = Number(device.config.macAgingTimeMs || DEFAULT_MAC_AGING_MS);
-  device.config.macTable = device.config.macTable.filter(e => e.static || e.type === "STATIC" || now - (e.lastSeenAt || e.learnedAt || now) < timeout);
+  device.config.macTable = device.config.macTable.filter(e => isStaticMacEntry(e) || now - (e.lastSeenAt || e.learnedAt || now) < timeout);
 }
 
 function removeDynamicMacEntry(device, mac, vlan) {
   const entry = lookupMacEntry(device, mac, vlan);
-  if (entry && !entry.static && entry.type !== "STATIC") removeMacEntry(device, mac, vlan);
+  if (entry && !isStaticMacEntry(entry)) removeMacEntry(device, mac, vlan);
+}
+
+export function isStaticMacEntry(entry) {
+  return entry?.static === true || String(entry?.type || "").toUpperCase() === "STATIC";
 }
 
 function ingressVlan(intf) {

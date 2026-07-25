@@ -1,6 +1,6 @@
 import { simulatePing, neighbors } from "../engine/network.js";
 import { resolveInterface } from "../engine/connections.js";
-import { addStaticMacEntry, clearDynamicMacEntries, formatMacForCisco, removeMacEntry, SWITCHING_DEVICE_KINDS } from "../engine/switching.js";
+import { addStaticMacEntry, clearDynamicMacEntries, formatMacForCisco, isStaticMacEntry, removeMacEntry, SWITCHING_DEVICE_KINDS } from "../engine/switching.js";
 import { normalizeMacAddress } from "../protocols/ethernet.js";
 
 export class CLI {
@@ -21,7 +21,7 @@ export class CLI {
     const entries = this.filteredMacEntries(tokens, arg);
     const lines=[`${"Vlan".padEnd(7)} ${"Mac Address".padEnd(17)} ${"Type".padEnd(11)} ${"Ports".padEnd(10)} Age`];
     for(const e of entries) {
-      const age = (String(e.type).toUpperCase()==="STATIC" || e.static) ? "-" : String(Math.max(0, Math.floor((Date.now() - (e.lastSeenAt || e.learnedAt || Date.now())) / 1000)));
+      const age = isStaticMacEntry(e) ? "-" : String(Math.max(0, Math.floor((Date.now() - (e.lastSeenAt || e.learnedAt || Date.now())) / 1000)));
       lines.push(`${String(e.vlan).padEnd(7)} ${formatMacForCisco(e.mac).padEnd(17)} ${String(e.type).toUpperCase().padEnd(11)} ${(e.interfaceId||e.port||"").padEnd(10)} ${age}`);
     }
     return lines.join("\n");
@@ -205,7 +205,7 @@ export class CLI {
       out.push("!");
     }
     for (const r of d.config.routes) out.push(`ip route ${r.network} ${r.mask} ${r.nextHop}`);
-    for (const e of d.config.macTable||[]) if (String(e.type).toUpperCase()==="STATIC" || e.static) out.push(`mac address-table static ${formatMacForCisco(e.mac)} vlan ${e.vlan} interface ${e.interfaceId||e.port}`);
+    for (const e of d.config.macTable||[]) if (isStaticMacEntry(e)) out.push(`mac address-table static ${formatMacForCisco(e.mac)} vlan ${e.vlan} interface ${e.interfaceId||e.port}`);
     if (d.config.ospf.processId) {
       out.push(`router ospf ${d.config.ospf.processId}`);
       d.config.ospf.networks.forEach(n=>out.push(` network ${n.network} ${n.wildcard} area ${n.area}`));

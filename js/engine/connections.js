@@ -211,6 +211,8 @@ function ethernetLike(intf) { return ["ethernet", "fiberEthernet", "wireless"].i
 function configuredValue(value) { const v = String(value || "auto").toLowerCase(); return v === "auto" ? null : value; }
 function supportedSpeeds(intf) { return intf.supportedSpeeds || (intf.speed && intf.speed !== "auto" ? [intf.speed] : ["10M", "100M"]); }
 function supportedDuplex(intf) { return intf.supportedDuplex || (intf.duplex && intf.duplex !== "auto" ? [intf.duplex] : ["half", "full"]); }
+// Shared rank table is used only by highestCommon() for same-domain values:
+// speed lists compare with speed lists, and duplex lists compare with duplex lists.
 const NEGOTIATION_ORDER = new Map(["10M", "11M", "54M", "100M", "150M", "1G", "10G", "half", "full"].map((value, index) => [value, index]));
 function highestCommon(a, b) {
   return [...a].filter(x => b.includes(x)).sort((x, y) => (NEGOTIATION_ORDER.get(y) ?? -1) - (NEGOTIATION_ORDER.get(x) ?? -1))[0] || null;

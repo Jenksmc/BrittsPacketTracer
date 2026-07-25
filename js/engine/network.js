@@ -69,8 +69,7 @@ export function defaultDevice(type, id, x, y, count) {
       interfaces: Object.fromEntries(def.ports.map(p => {
         const intf = physicalInterface(p, def);
         intf.shutdown = routed && !ROUTED_DEVICE_DEFAULT_UP_INTERFACE_TYPES.has(intf.interfaceType);
-        // Stable MAC generation only needs the persisted device id and interface name.
-        intf.mac = stableInterfaceMac({ id, name: hostname }, p);
+        intf.mac = stableInterfaceMac({ id }, p);
         return [p, intf];
       })),
       vlans:{1:{id:1,name:"default"}}, routes:[], ipv6Routes:[],

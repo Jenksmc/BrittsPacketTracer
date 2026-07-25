@@ -14,7 +14,8 @@ export function normalizeMacAddress(value) {
   if (raw.includes(".")) compact = raw.replace(/\./g, "");
   else compact = raw.replace(/[:-]/g, "");
   if (!HEX_MAC.test(compact)) return null;
-  return compact.match(/../g).join(":");
+  const octets = compact.match(/../g);
+  return octets ? octets.join(":") : null;
 }
 
 export function isValidMacAddress(value) {
