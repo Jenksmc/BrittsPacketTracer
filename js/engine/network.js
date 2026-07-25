@@ -103,4 +103,4 @@ function learnAlongPath(state,path,target){
     if(ip&&!d.config.arpTable.some(e=>e.ip===ip))d.config.arpTable.push({ip,mac:firstMac(target),type:"dynamic"});
   }
 }
-function firstMac(d){ const intf=Object.values(d.config.interfaces)[0]; return (intf&&intf.mac)||randomMac(); }
+function firstMac(d){ const intf=Object.values(d.config.interfaces)[0]; return intf&&intf.mac?intf.mac:randomMac(); }
