@@ -238,6 +238,8 @@ const INTERFACE_ALIASES = [
   ["wireless", "wi"]
 ];
 
+// Tuple format is [canonical prefix, normalized short prefix] for IOS-style
+// interface commands such as "interface FastEthernet 0/1" and "int fa0/1".
 export function normalizeInterfaceName(name) {
   let value = String(name || "").toLowerCase().replace(/\s+/g, "").replace(/_/g, "-");
   for (const [longName, shortName] of INTERFACE_ALIASES) {
@@ -272,6 +274,8 @@ export const ENDPOINT_INDICATORS = {
 };
 
 export function endpointIndicatorFor(state, link, side) {
+  // Keep this priority in sync with docs/PHASE1_COMPATIBILITY_MATRIX.md:
+  // disconnected/power/admin/errors/compatibility before STP and EtherChannel overlays.
   const endpoint = link?.[side];
   if (!endpoint?.deviceId || !endpoint?.port) return ENDPOINT_INDICATORS.disconnected;
   const device = state.devices.find(d => d.id === endpoint.deviceId);

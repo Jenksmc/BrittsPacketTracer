@@ -223,6 +223,13 @@ export class CLI {
   interfaceSummary(i) {
     const admin = i.shutdown ? "administratively down" : "up";
     const protocol = i.shutdown || i.linkState === "down" ? "down" : "up";
-    return `${i.name} is ${admin}, line protocol is ${protocol}\n  Hardware is ${i.connectorType || "unknown"}, address is ${i.mac || "unknown"}\n  Internet address is ${i.ip ? `${i.ip} ${i.mask}` : "unassigned"}\n  MTU 1500 bytes, BW ${i.speed || "auto"}, DLY 10 usec\n  Full-duplex setting: ${i.duplex || "auto"}, Auto-negotiation: ${i.autoNegotiation === false ? "off" : "on"}\n  Description: ${i.description||"none"}`;
+    return [
+      `${i.name} is ${admin}, line protocol is ${protocol}`,
+      `  Hardware is ${i.connectorType || "unknown"}, address is ${i.mac || "unknown"}`,
+      `  Internet address is ${i.ip ? `${i.ip} ${i.mask}` : "unassigned"}`,
+      `  MTU 1500 bytes, BW ${i.speed || "auto"}, DLY 10 usec`,
+      `  Full-duplex setting: ${i.duplex || "auto"}, Auto-negotiation: ${i.autoNegotiation === false ? "off" : "on"}`,
+      `  Description: ${i.description||"none"}`
+    ].join("\n");
   }
 }
