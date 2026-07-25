@@ -244,7 +244,11 @@ export function clearDynamicMacEntries(device, filter = {}) {
   ensureDeviceLayer2State(device);
   const vlan = filter.vlan ? normalizeVlanId(filter.vlan) : null;
   const before = device.config.macTable.length;
-  device.config.macTable = device.config.macTable.filter(e => isStaticMacEntry(e) || (vlan && e.vlan !== vlan) || (filter.interfaceId && macEntryInterface(e) !== filter.interfaceId));
+  device.config.macTable = device.config.macTable.filter(e => {
+    const matchesVlan = !vlan || e.vlan === vlan;
+    const matchesInterface = !filter.interfaceId || macEntryInterface(e) === filter.interfaceId;
+    return isStaticMacEntry(e) || !(matchesVlan && matchesInterface);
+  });
   return before - device.config.macTable.length;
 }
 

@@ -21,7 +21,8 @@ export class CLI {
     const entries = this.filteredMacEntries(tokens, arg);
     const lines=[`${"Vlan".padEnd(7)} ${"Mac Address".padEnd(17)} ${"Type".padEnd(11)} ${"Ports".padEnd(10)} Age`];
     for(const e of entries) {
-      const age = isStaticMacEntry(e) ? "-" : String(Math.max(0, Math.floor((Date.now() - (e.lastSeenAt || e.learnedAt || Date.now())) / 1000)));
+      const timestamp = e.lastSeenAt || e.learnedAt;
+      const age = isStaticMacEntry(e) ? "-" : timestamp ? String(Math.max(0, Math.floor((Date.now() - timestamp) / 1000))) : "?";
       lines.push(`${String(e.vlan).padEnd(7)} ${formatMacForCisco(e.mac).padEnd(17)} ${String(e.type).toUpperCase().padEnd(11)} ${(e.interfaceId||e.port||"").padEnd(10)} ${age}`);
     }
     return lines.join("\n");
@@ -60,8 +61,8 @@ export class CLI {
     }
     const cleared = clearDynamicMacEntries(this.device, filter);
     this.changed();
-    const suffix = cleared === 1 ? "y" : "ies";
-    return `${cleared} dynamic MAC address-table entr${suffix} cleared.`;
+    const noun = cleared === 1 ? "entry" : "entries";
+    return `${cleared} dynamic MAC address-table ${noun} cleared.`;
   }
   configureStaticMac(command, remove) {
     if (!this.switchingSupported()) return "% MAC address-table is not supported on this device";

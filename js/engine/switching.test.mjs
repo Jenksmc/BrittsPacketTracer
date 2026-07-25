@@ -52,6 +52,12 @@ function link(state, a, aPort, b, bPort, id = `l${state.links.length + 1}`) {
   assert.equal(lookupMacEntry(sw, "00:aa:bb:cc:dd:ee", 20).type, "STATIC");
   clearDynamicMacEntries(sw);
   assert.equal(sw.config.macTable.length, 1);
+  learnSourceMac(sw, "00:11:22:33:44:55", 1, "FastEthernet0/2", 4000);
+  learnSourceMac(sw, "00:11:22:33:44:66", 2, "FastEthernet0/3", 4000);
+  assert.equal(clearDynamicMacEntries(sw, { vlan: 1 }), 1);
+  assert.equal(lookupMacEntry(sw, "00:11:22:33:44:66", 2).interfaceId, "FastEthernet0/3");
+  assert.equal(clearDynamicMacEntries(sw, { interfaceId: "FastEthernet0/3" }), 1);
+  assert.equal(sw.config.macTable.length, 1);
 }
 
 {
