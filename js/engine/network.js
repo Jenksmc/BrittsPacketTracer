@@ -90,7 +90,18 @@ export function interfaceUp(device,intf){ return device.enabled&&device.config.p
 export function findDeviceByIp(state,ip){ for(const d of state.devices){ if(d.config.ipSettings&&d.config.ipSettings.ip===ip)return {device:d,intf:null}; for(const intf of Object.values(d.config.interfaces))if(intf.ip===ip)return {device:d,intf}; } return null; }
 export function neighbors(state,deviceId){ const out=[]; for(const link of state.links){ if(link.a.deviceId===deviceId||link.b.deviceId===deviceId){ const local=link.a.deviceId===deviceId?link.a:link.b,remote=link.a.deviceId===deviceId?link.b:link.a,rd=state.devices.find(d=>d.id===remote.deviceId); if(rd)out.push({link,local,remote,device:rd}); }} return out; }
 function linkOperational(state,link){ const result=validateLink(state,link); link.status=result.reason; return result.ok; }
-export function computeLinkStates(state){ attachDeviceDefinitions(state.devices,DEVICE_TYPES); state.links.forEach(l=>l.up=linkOperational(state,l)); state.devices.forEach(d=>hydrateDeviceInterfaces(d,DEVICE_TYPES[d.type])); }
+export function computeLinkStates(state){
+  attachDeviceDefinitions(state.devices,DEVICE_TYPES);
+  state.devices.forEach(d=>Object.values(d.config.interfaces||{}).forEach(i=>{i.linkState="down";i.administrativeState=i.shutdown?"down":"up"}));
+  state.links.forEach(l=>{
+    l.up=linkOperational(state,l);
+    for(const side of ["a","b"]){
+      const endpoint=l[side],device=state.devices.find(d=>d.id===endpoint?.deviceId),intf=device?.config.interfaces?.[endpoint?.port];
+      if(intf)intf.linkState=l.up?"up":"down";
+    }
+  });
+  state.devices.forEach(d=>hydrateDeviceInterfaces(d,DEVICE_TYPES[d.type]));
+}
 export function simulatePing(state,sourceId,destIp){ computeLinkStates(state); const source=state.devices.find(d=>d.id===sourceId),target=findDeviceByIp(state,destIp); if(!source)return {ok:false,output:"Invalid source device."}; if(!target)return {ok:false,output:`Pinging ${destIp} with 32 bytes of data:\nRequest timed out.\n\nPing statistics for ${destIp}:\n    Packets: Sent = 4, Received = 0, Lost = 4 (100% loss)`}; const visited=new Set(),queue=[source.id],parent=new Map(); while(queue.length){ const id=queue.shift(); if(id===target.device.id){ const path=[]; let cur=id; while(cur){path.unshift(cur);cur=parent.get(cur);} learnAlongPath(state,path,target.device); return {ok:true,path,output:`Pinging ${destIp} with 32 bytes of data:\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\nReply from ${destIp}: bytes=32 time<1ms TTL=128\n\nPing statistics for ${destIp}:\n    Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)`}; } if(visited.has(id))continue; visited.add(id); const dev=state.devices.find(d=>d.id===id); for(const n of neighbors(state,id)){ if(!n.link.up||visited.has(n.device.id))continue; const li=dev.config.interfaces[n.local.port],ri=n.device.config.interfaces[n.remote.port]; const vlanOK=li.mode==="trunk"||ri.mode==="trunk"||li.vlan===ri.vlan; if(vlanOK){parent.set(n.device.id,id);queue.push(n.device.id);} }} return {ok:false,output:`Pinging ${destIp} with 32 bytes of data:\nRequest timed out.\nDestination host unreachable.`}; }
 function learnAlongPath(state,path,target){
   for(let i=0;i<path.length;i++){

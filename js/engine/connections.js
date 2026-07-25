@@ -219,6 +219,143 @@ export function abbreviateInterfaceName(name) {
     .replace(/^GigabitEthernet/i, "Gi")
     .replace(/^Serial/i, "Se")
     .replace(/^Management/i, "Mgmt")
+    .replace(/^Port-channel/i, "Po")
+    .replace(/^Vlan/i, "Vl")
     .replace(/^Wireless/i, "Wi")
     .replace(/^Ethernet/i, "Et");
+}
+
+const INTERFACE_ALIASES = [
+  ["tengigabitethernet", "te"],
+  ["fastethernet", "fa"],
+  ["gigabitethernet", "gi"],
+  ["ethernet", "et"],
+  ["serial", "se"],
+  ["port-channel", "po"],
+  ["portchannel", "po"],
+  ["vlan", "vl"],
+  ["management", "mgmt"],
+  ["wireless", "wi"]
+];
+
+export function normalizeInterfaceName(name) {
+  let value = String(name || "").toLowerCase().replace(/\s+/g, "").replace(/_/g, "-");
+  for (const [longName, shortName] of INTERFACE_ALIASES) {
+    if (value.startsWith(longName)) return shortName + value.slice(longName.length);
+  }
+  return value;
+}
+
+export function resolveInterface(interfaces, name) {
+  const wanted = normalizeInterfaceName(name);
+  const keys = Object.keys(interfaces || {});
+  return keys.find(key => normalizeInterfaceName(key) === wanted) || null;
+}
+
+export const ENDPOINT_INDICATORS = {
+  forwarding: { key: "forwarding", label: "Physical link up / STP forwarding", color: "#25a55f", shape: "triangle", symbol: "▶" },
+  negotiating: { key: "negotiating", label: "Negotiating / STP listening", color: "#d68a00", shape: "diamond", symbol: "◆" },
+  learning: { key: "learning", label: "STP learning", color: "#c9a100", shape: "triangle", symbol: "▲" },
+  blocking: { key: "blocking", label: "STP blocking or discarding", color: "#8b5cf6", shape: "blocked", symbol: "⊘" },
+  adminDown: { key: "adminDown", label: "Administratively down", color: "#6b7280", shape: "square", symbol: "■" },
+  down: { key: "down", label: "Physical link down", color: "#d64545", shape: "triangle", symbol: "▼" },
+  errDisabled: { key: "errDisabled", label: "Error-disabled / BPDU Guard", color: "#991b1b", shape: "octagon", symbol: "!" },
+  bundled: { key: "bundled", label: "EtherChannel bundled member", color: "#15803d", shape: "badge", symbol: "Po" },
+  suspended: { key: "suspended", label: "EtherChannel suspended or incompatible", color: "#b45309", shape: "badge", symbol: "S" },
+  standalone: { key: "standalone", label: "EtherChannel standalone member", color: "#0f766e", shape: "badge", symbol: "I" },
+  disconnected: { key: "disconnected", label: "Cable disconnected at this end", color: "#9ca3af", shape: "circle", symbol: "○" },
+  incompatible: { key: "incompatible", label: "Cable or port incompatibility", color: "#e11d48", shape: "octagon", symbol: "×" },
+  serialDce: { key: "serialDce", label: "Serial DCE role", color: "#2563eb", shape: "badge", symbol: "DCE" },
+  serialDte: { key: "serialDte", label: "Serial DTE role", color: "#0f766e", shape: "badge", symbol: "DTE" },
+  wireless: { key: "wireless", label: "Wireless association", color: "#0891b2", shape: "circle", symbol: "≋" },
+  unknown: { key: "unknown", label: "Unknown or not modeled", color: "#6b7280", shape: "circle", symbol: "?" }
+};
+
+export function endpointIndicatorFor(state, link, side) {
+  const endpoint = link?.[side];
+  if (!endpoint?.deviceId || !endpoint?.port) return ENDPOINT_INDICATORS.disconnected;
+  const device = state.devices.find(d => d.id === endpoint.deviceId);
+  const intf = device?.config?.interfaces?.[endpoint.port];
+  if (!device || !intf) return ENDPOINT_INDICATORS.disconnected;
+  const cableKey = link.resolvedCableType || cableForLink(link);
+  if (device.enabled === false || device.config?.physical?.power === false || intf.powerState === "off" || intf.modulePresent === false) return ENDPOINT_INDICATORS.down;
+  if (intf.shutdown || intf.administrativeState === "down") return ENDPOINT_INDICATORS.adminDown;
+  if (intf.errDisabled || intf.errorDisabled || intf.bpduGuardState === "err-disabled") return ENDPOINT_INDICATORS.errDisabled;
+  if (!portSupportsCable(intf, cableKey)) return ENDPOINT_INDICATORS.incompatible;
+  if (intf.linkState === "down" || link.up === false) return ENDPOINT_INDICATORS.down;
+
+  const channel = String(intf.etherChannelState || intf.channelState || "").toLowerCase();
+  if (["suspended", "incompatible"].includes(channel)) return ENDPOINT_INDICATORS.suspended;
+  if (["standalone", "individual"].includes(channel)) return ENDPOINT_INDICATORS.standalone;
+  if (["bundled", "port-channel", "active"].includes(channel)) return ENDPOINT_INDICATORS.bundled;
+
+  const stp = String(intf.stpState || intf.rstpState || "").toLowerCase();
+  if (["blocking", "discarding", "blocked"].includes(stp)) return ENDPOINT_INDICATORS.blocking;
+  if (["listening", "negotiating"].includes(stp)) return ENDPOINT_INDICATORS.negotiating;
+  if (stp === "learning") return ENDPOINT_INDICATORS.learning;
+
+  if (cableKey === "serialDce" && side === "a") return ENDPOINT_INDICATORS.serialDce;
+  if (cableKey === "serialDte" && side === "a") return ENDPOINT_INDICATORS.serialDte;
+  if (intf.interfaceType === "wireless" || cableKey === "wirelessAssociation") return ENDPOINT_INDICATORS.wireless;
+  return ENDPOINT_INDICATORS.forwarding;
+}
+
+export function devicePortPoint(device, portName, options = {}) {
+  const width = options.width || 112, height = options.height || 78;
+  const names = Object.keys(device?.config?.interfaces || {});
+  const index = Math.max(0, names.indexOf(portName));
+  const count = Math.max(1, names.length);
+  const side = index % 4;
+  const slot = Math.floor(index / 4);
+  const sideCount = Math.max(1, Math.ceil(count / 4));
+  const t = (slot + 1) / (sideCount + 1);
+  if (side === 0) return { x: device.x + width, y: device.y + height * t };
+  if (side === 1) return { x: device.x + width * (1 - t), y: device.y + height };
+  if (side === 2) return { x: device.x, y: device.y + height * (1 - t) };
+  return { x: device.x + width * t, y: device.y };
+}
+
+export function routeConnectionPath(link, state, options = {}) {
+  const a = state.devices.find(d => d.id === link.a.deviceId);
+  const b = state.devices.find(d => d.id === link.b.deviceId);
+  if (!a || !b) return null;
+  const start = devicePortPoint(a, link.a.port, options.device);
+  const end = devicePortPoint(b, link.b.port, options.device);
+  const offset = options.offset || 0;
+  const dx = end.x - start.x, dy = end.y - start.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len;
+  const mx = (start.x + end.x) / 2 + nx * offset;
+  const my = (start.y + end.y) / 2 + ny * offset;
+  const path = `M ${start.x} ${start.y} Q ${mx} ${my} ${end.x} ${end.y}`;
+  return { start, end, control: { x: mx, y: my }, mid: quadraticPoint(start, { x: mx, y: my }, end, 0.5), path, offset };
+}
+
+export function parallelLinkOffsets(links, spacing = 18) {
+  const groups = new Map();
+  for (const link of links) {
+    const ids = [link.a.deviceId, link.b.deviceId].sort().join("|");
+    if (!groups.has(ids)) groups.set(ids, []);
+    groups.get(ids).push(link);
+  }
+  const offsets = new Map();
+  for (const group of groups.values()) {
+    group.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    const center = (group.length - 1) / 2;
+    group.forEach((link, index) => offsets.set(link.id, (index - center) * spacing));
+  }
+  return offsets;
+}
+
+export function routeParallelLinks(links, state, options = {}) {
+  const offsets = parallelLinkOffsets(links, options.spacing || 18);
+  return new Map(links.map(link => [link.id, routeConnectionPath(link, state, { ...options, offset: offsets.get(link.id) || 0 })]));
+}
+
+function quadraticPoint(a, c, b, t) {
+  const mt = 1 - t;
+  return {
+    x: mt * mt * a.x + 2 * mt * t * c.x + t * t * b.x,
+    y: mt * mt * a.y + 2 * mt * t * c.y + t * t * b.y
+  };
 }

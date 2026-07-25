@@ -1,4 +1,5 @@
 import { simulatePing, neighbors } from "../engine/network.js";
+import { resolveInterface } from "../engine/connections.js";
 
 export class CLI {
   constructor(state, device, onChange) {
@@ -84,9 +85,16 @@ export class CLI {
       }
       return rows.join("\n");
     }
+    if (a.startsWith("interface ") || a.startsWith("interfaces ") || a.startsWith("int ")) {
+      const name = arg.replace(/^(?:interfaces?|int)\s+/i, "");
+      const key = resolveInterface(this.device.config.interfaces, name);
+      if (!key) return "% Invalid interface type and number";
+      const i = this.device.config.interfaces[key];
+      return this.interfaceSummary(i);
+    }
     if (a==="interfaces" || a==="int" || a==="interface") {
       return Object.values(this.device.config.interfaces).map(i =>
-        `${i.name} is ${i.shutdown?"administratively down":"up"}, line protocol is ${i.shutdown?"down":"up"}\n  Internet address is ${i.ip ? `${i.ip} ${i.mask}` : "unassigned"}\n  Description: ${i.description||"none"}`
+        this.interfaceSummary(i)
       ).join("\n\n");
     }
     if (a==="vlan brief" || a==="vlan br") {
@@ -151,12 +159,7 @@ export class CLI {
     }
     if (c.startsWith("interface ") || c.startsWith("int ") || c.startsWith("intf ")) {
       const name=command.replace(/^(?:interface|int|intf)\s+/i,"");
-      const normalize = value => value.toLowerCase().replace(/\s+/g,"")
-        .replace(/^gigabitethernet/,"gi").replace(/^fastethernet/,"fa")
-        .replace(/^ethernet/,"e").replace(/^serial/,"s")
-        .replace(/^management/,"mgmt");
-      const wanted=normalize(name);
-      const key=Object.keys(this.device.config.interfaces).find(k=>normalize(k)===wanted || normalize(k).startsWith(wanted));
+      const key=resolveInterface(this.device.config.interfaces,name);
       if (!key) return "% Invalid interface type and number";
       this.currentInterface=key; this.mode="interface"; return "";
     }
@@ -217,4 +220,9 @@ export class CLI {
     return "% Invalid OSPF command";
   }
   changed() { if(this.onChange)this.onChange(); }
+  interfaceSummary(i) {
+    const admin = i.shutdown ? "administratively down" : "up";
+    const protocol = i.shutdown || i.linkState === "down" ? "down" : "up";
+    return `${i.name} is ${admin}, line protocol is ${protocol}\n  Hardware is ${i.connectorType || "unknown"}, address is ${i.mac || "unknown"}\n  Internet address is ${i.ip ? `${i.ip} ${i.mask}` : "unassigned"}\n  MTU 1500 bytes, BW ${i.speed || "auto"}, DLY 10 usec\n  Full-duplex setting: ${i.duplex || "auto"}, Auto-negotiation: ${i.autoNegotiation === false ? "off" : "on"}\n  Description: ${i.description||"none"}`;
+  }
 }
