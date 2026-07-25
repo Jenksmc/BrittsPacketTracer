@@ -27,7 +27,6 @@ This matrix documents the implemented Layer 1 connection palette and physical in
 
 ## Known Phase 1 limitations
 
-- Link status still uses the existing up/down model plus compatibility status text; detailed speed/duplex negotiation is planned for Phase 2.
 - Serial clock-rate enforcement is documented but not enforced until Phase 2.
 - Multi-end octal breakout behavior and richer USB behavior are not modeled yet.
 - Wireless association is represented as a compatible Layer 1 connection; SSID/security association logic is deferred to later wireless milestones.
@@ -64,3 +63,28 @@ Priority order for endpoint state is:
 | Red `×` | Cable or port incompatibility. |
 | DCE/DTE badge | Serial role on the selected serial cable side. |
 | Cyan wireless marker | Wireless association state. |
+
+## Phase 2 verification result
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Administrative state distinct from operational state | Complete and verified | `shutdown`, `administrativeState`, and `linkState` are separate fields in `device.config.interfaces`; CLI and GUI mutate the same object. |
+| Link-state calculation evaluates both endpoints | Complete and verified | `computeLinkStates()` calls `validateLink()` for every link and updates both endpoint interface objects. |
+| Link state after cable creation/removal, shutdown/no shutdown, and power change | Complete and verified | UI operations update endpoint references and rerender through `computeLinkStates()`; regression tests cover endpoint indicators and link validation. |
+| Speed/duplex capabilities and negotiation | Implemented but incomplete | Ethernet-like interfaces now expose supported speeds/duplex modes and `validateLink()` computes negotiated values; exhaustive Packet Tracer mismatch behavior remains follow-up work. |
+| Device-specific inventories | Complete and verified | `DEVICE_TYPES` defines model-specific port lists and `defaultDevice()` hydrates those exact ports. |
+| Interface parsing | Complete and verified | `normalizeInterfaceName()`/`resolveInterface()` support IOS-style names and abbreviations and reject nonexistent families. |
+| CLI/GUI interface synchronization | Complete and verified | CLI and Config tab both write `device.config.interfaces[interfaceName]`. |
+| Save/load of interface state | Complete and verified | The versioned JSON state persists interfaces and links; hydration fills missing metadata for older saves. |
+| Automated tests | Implemented but incomplete | Existing and new Node tests cover parsing, connections, compatibility, speed mismatch, save-safe stable state, and Layer 2 behavior; browser workflows still require manual smoke testing. |
+
+## Phase 3 compatibility matrix
+
+| Device kind | Phase 3 behavior |
+| --- | --- |
+| Hub / repeater | Repeats ingress frames out other eligible operational ports, does not learn MAC addresses, and records drops/counters through the shared forwarding path. |
+| Bridge | Learns source MAC addresses per VLAN and forwards/floods using its local MAC table. |
+| Switch | Learns, ages, forwards known unicast, floods unknown unicast/broadcast/multicast within the access VLAN, and exposes MAC-table CLI/UI inspection. |
+| Multilayer switch | Uses the same Layer 2 switching foundation for switchports; full routed SVI/multilayer forwarding remains later work. |
+| Router / firewall | Receives Ethernet frames addressed to the interface MAC, broadcast, or multicast, but does not bridge frames between routed interfaces. |
+| End devices | Receive own unicast, broadcast, and multicast frames; unrelated unicast is dropped unless future promiscuous behavior is added. |
