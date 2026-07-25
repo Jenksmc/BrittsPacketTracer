@@ -102,7 +102,7 @@ export function portSupportsCable(intf, cableKey) {
   if (cableKey === "automatic") return true;
   if (["copperStraightThrough", "copperCrossover"].includes(cableKey)) return type === "ethernet" && connector === "rj45";
   if (cableKey === "fiber") return type === "fiberEthernet" || connector === "sfp";
-  if (cableKey === "console" || cableKey === "octal") return type === "console" || connector === "rs232";
+  if (cableKey === "console" || cableKey === "octal") return consoleCableEndpoint(intf);
   if (cableKey === "phone") return type === "phone" || connector === "rj11";
   if (cableKey === "coaxial") return type === "coaxial" || connector === "coax";
   if (cableKey === "serialDce" || cableKey === "serialDte") return type === "serial";
@@ -193,7 +193,11 @@ function automaticReason(cableType, aDevice, aPort, bDevice, bPort) {
 }
 
 function deviceKind(device) {
-  return device.kind || device.typeDef?.kind || device.modelKind || "";
+  return device.kind || "";
+}
+
+function consoleCableEndpoint(intf) {
+  return intf.interfaceType === "console" || intf.connectorType === "rs232";
 }
 
 export function attachDeviceDefinitions(devices, deviceTypes) {
